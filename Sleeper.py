@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 
 import esipy as api
+import datetime
+import pickle
+import os
 
 print('Initiailizing app...')
 esi_app = api.EsiApp()
@@ -96,4 +99,17 @@ MarketDump = Sleeper(app, client)
 
 MarketDump._update_region_list()
 
-MarketDump.market_dump()
+refresh_time = datetime.datetime.now()
+
+dump_data = MarketDump.market_dump()
+
+filename_timestamp = refresh_time.strftime('%c')
+
+os.chdir('data_dumps')
+
+pik_filename = 'market_dump-'+str(refresh_time)[:10]+'.pik'
+pik_file = open(pik_filename, 'wb')
+pickle.dump(dump_data, pik_file)
+pik_file.close()
+
+os.chdir('..')
