@@ -2,6 +2,8 @@
 
 import esipy as api
 import datetime
+import h5py
+import numpy as np
 import pickle
 import os
 import yaml
@@ -13,14 +15,35 @@ app = esi_app.get_latest_swagger
 print('Initializing client...')
 client = api.EsiClient(
         retry_requests=True,
-        headers={'User-Agent':'Sleeper \\ <0.0.1>'},
+        headers={'User-Agent':'Sleeper \\ <0.1.0>'},
         raw_body_only=False)
+
+def crawldir(topdir=[], ext='sxm'):
+    '''
+    Crawls through given directory topdir, returns list of all files with 
+    extension matching ext
+    '''
+    fn = dict()
+    for root, dirs, files in os.walk(topdir):
+              for name in files:
+              
+                if len(re.findall('\.'+ext,name)):
+                    addname = os.path.join(root,name)
+
+                    if root in fn.keys():
+                        fn[root].append(addname)
+
+                    else:
+                        fn[root] = [addname]    
+    return fn
 
 class Sleeper(object):
     
     def __init__(self, app, client):
         self.app = app
         self.client = client
+        self.root_dir = ''
+        self.settings_fname = 'sleeper_settings.sl'
         return
     
     def _update_region_list(self):
@@ -32,7 +55,7 @@ class Sleeper(object):
         self.region_list = {}
         i = 1
         for region_id in region_ids:
-            print(f'{i}/{len(region_ids)}')
+#            print(f'{i}/{len(region_ids)}')
             operation = self.app.op['get_universe_regions_region_id'](
                 region_id=region_id)
             response = self.client.request(operation)
@@ -52,12 +75,7 @@ class Sleeper(object):
             print(name)
             region_id = region_data['region_id']
             unpacked = []
-            response = self._request_region_market_orders(
-                    region_id,
-                    order_type='all')
-            for entry in response.data:
-                unpacked.append(dict(entry))
-            orders[name] = unpacked
+            orders[name] = self._request_region_market_orders(region_id, order_type='all')
         refresh_time = datetime.datetime.now()
         filename_timestamp = refresh_time.strftime('%c')
         os.chdir('data_dumps')
@@ -69,16 +87,25 @@ class Sleeper(object):
         
         return
     
-    def _request_region_market_orders(self,
-            region_id=10000002,
-            type_id=34,
-            order_type='all',
-            page=1):
-        operation = self.app.op['get_markets_region_id_orders'](
-                region_id=region_id,
-                order_type=order_type)
-        response = client.request(operation)
-        return response
+    def _request_region_market_orders(self, region_id=10000002, type_id=34, order_type='all'):
+        page = 1
+        while True:
+            operation = self.app.op['get_markets_region_id_orders'](region_id=region_id, order_type=order_type, page=page)
+            response = client.request(operation)
+            if page == 1:
+                orders = [dict(entry) for entry in response.data]
+                if len(orders)==0:
+                    break
+                page += 1
+                continue
+            else:
+                new_orders = [dict(entry) for entry in response.data]
+                if len(new_orders) == 0:
+                    break
+                for entry in new_orders:
+                    orders.append(entry)
+            page += 1
+        return orders
     
     def aggregate_data(self, data_directory):
         print('Aggregating order data...')
@@ -127,7 +154,17 @@ class Sleeper(object):
         '''
         return order_catalog
     
+    def _load_settings_file_(self):
+        dir_dump = crawldir(self.root_dir, 'sl')
+        if len(dir_dump) == 0:
+            self._new_settings_file_()
+        return
+    
+    def _new_settings_file_():
+        return
+    
 MarketDump = Sleeper(app, client)
+#MarketDump._load_settings_file_()
 MarketDump._update_region_list()
 MarketDump.market_dump()
 orders = MarketDump.aggregate_data('data_dumps')
