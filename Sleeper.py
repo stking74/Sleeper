@@ -3,21 +3,9 @@
 import esipy as api
 import datetime
 import time
-import h5py
 import numpy as np
 import pickle
 import os
-import yaml
-
-print('Initiailizing app...')
-esi_app = api.EsiApp()
-print('Updating swagger...')
-app = esi_app.get_latest_swagger
-print('Initializing client...')
-client = api.EsiClient(
-        retry_requests=True,
-        headers={'User-Agent':'Sleeper \\ <0.1.0>'},
-        raw_body_only=False)
 
 def crawldir(topdir=[], ext='sxm'):
     '''
@@ -41,9 +29,15 @@ def crawldir(topdir=[], ext='sxm'):
 
 class Sleeper():
     
-    def __init__(self, app, client):
-        self.app = app
-        self.client = client
+    def __init__(self):
+        print('Initiailizing app...')
+        self.esi_app = api.EsiApp()
+        print('Updating swagger...')
+        self.app = self.esi_app.get_latest_swagger
+        print('Initializing client...')
+        self.client = api.EsiClient(retry_requests=True, 
+                                    headers={'User-Agent':'Sleeper \\ <0.3.0>'},
+                                    raw_body_only=False)
         self.root_dir = os.getcwd()
         self.store_dir = os.path.join(self.root_dir, 'data_dumps')
         self.settings_fname = 'sleeper_settings.sl'
@@ -70,19 +64,42 @@ class Sleeper():
         return
     
     def market_dump(self):
+        
+        def _request_region_market_orders(region_id=10000002, type_id=34, order_type='all'):
+            page = 1
+            while True:
+                operation = self.app.op['get_markets_region_id_orders'](region_id=region_id, order_type=order_type, page=page)
+                response = self.client.request(operation)
+                pull_time = datetime.datetime.now()
+                time.sleep(0.25)
+                if page == 1:
+                    orders = [dict(entry) for entry in response.data]
+                    for order in orders:
+                        order['timestamps'] = pull_time
+                    if len(orders)==0:
+                        break
+                    page += 1
+                    continue
+                else:
+                    new_orders = [dict(entry) for entry in response.data]
+                    for order in new_orders:
+                        order['timestamps'] = pull_time
+                    if len(new_orders) == 0:
+                        break
+                    for entry in new_orders:
+                        orders.append(entry)
+                page += 1
+            return orders
+        
         orders = {}
         print('Scraping market data')
         print('Region:')
         for region in self.region_list.items():
-            pull_time = datetime.datetime.now()
+            
             name, region_data = region
             print(name)
             region_id = region_data['region_id']
-            unpacked = []
-            orders[name] = self._request_region_market_orders(region_id, order_type='all')
-            for order in orders[name]:
-                order['timestamps'] = pull_time
-            time.sleep(0.5)
+            orders[name] = _request_region_market_orders(region_id, order_type='all')
         refresh_time = datetime.datetime.now()
         filename_timestamp = refresh_time.strftime('%c')
         os.chdir(self.store_dir)
@@ -94,25 +111,7 @@ class Sleeper():
         
         return
     
-    def _request_region_market_orders(self, region_id=10000002, type_id=34, order_type='all'):
-        page = 1
-        while True:
-            operation = self.app.op['get_markets_region_id_orders'](region_id=region_id, order_type=order_type, page=page)
-            response = client.request(operation)
-            if page == 1:
-                orders = [dict(entry) for entry in response.data]
-                if len(orders)==0:
-                    break
-                page += 1
-                continue
-            else:
-                new_orders = [dict(entry) for entry in response.data]
-                if len(new_orders) == 0:
-                    break
-                for entry in new_orders:
-                    orders.append(entry)
-            page += 1
-        return orders
+    
     
     def aggregate_data(self, data_directory):
         print('Aggregating order data...')
@@ -184,23 +183,17 @@ class Sleeper():
         catalog = []
         order_ids = set()
         order_id_list = []
+        previous_length = 0
         for file in weekly_dumps:
             f_timestamp = file[12:22]
             timestamp = datetime.datetime.strptime(f_timestamp, '%Y-%m-%d')
             if timestamp > week_ago:
-                print('processing file:', file)
+                print('loading file:', file)
                 with open(file, 'rb') as f:
                     data_dump = pickle.load(f)
                 for key, region in data_dump.items():
                     print('%s: %i'%(key, len(region)))
                     oids = [order['order_id'] for order in region]
-                    new_oids = []
-                    old_oids = []
-                    for idx, oid in enumerate(oids):
-                        if oid in order_ids:
-                            old_oids.append(idx)
-                        else:
-                            new_oids.append(idx)
                     for order in region:
                         ti = time.time()
                         oid = order['order_id']
@@ -231,12 +224,9 @@ class Sleeper():
                                 continue
                         te = time.time() - ti
 #                        print(oid, len(order_ids), te)
-                        
+            running_length = len(catalog)
+            print('Current catalog length:', running_length)
+            new_orders = running_length - previous_length
+            previous_length = running_length
+            print('Added',new_orders,'new orders.')
         return catalog
-        
-    
-MarketDump = Sleeper(app, client)
-#MarketDump._load_settings_file_()
-#MarketDump._update_region_list()
-#MarketDump.market_dump()
-catalog = MarketDump._aggregate_weekly_()
