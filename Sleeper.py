@@ -231,3 +231,99 @@ class Sleeper():
                 previous_length = running_length
                 print('Added',new_orders,'new orders.')
         return catalog
+
+class Order:
+    '''
+    Object for handling and organization of order data. Attributes correspond
+    to values available from Swagger through regional market order requests. 
+    '''
+    def __init__(self, duration, is_buy_order, issued, location_id, min_volume,
+                 order_id, price, _range, system_id, timestamps, type_id,
+                 volume_remain, volume_total):
+        '''
+        Initialize Order, assign attributes from individual order entries in 
+        raw data dump.
+        
+        Input:
+        --------
+            duration : int
+                Duration of order, in hours or days
+            is_buy_order : bool
+                True if buy order, False if sell order
+            issued : datetime.datetime
+                Timestamp for order creation
+            location_id : int
+                Unique location identifier for order
+            min_volume : int
+                Minimum volume allowed per transaction
+            order_id : int
+                Unique order identification number
+            price : list of floats
+                Order unit price, in the order in which they were captured in a market dump
+            _range : str
+                Distance from location within which transaction may occur
+            system_id : int
+                Unique identifier of system in which order was placed, redundant information also provided indirectly by location_id
+            timestamps : list of datetime.datetime objects
+                Timestamps for each market dump in which order was located
+            type_id : int
+                Unique identifier for type of item being sold/bought in order
+            volume_remain : int
+                Total number of units still available/desired in order
+            volume_total : int
+                Total number of units available/desired at order creation
+        '''
+        self.duration = duration
+        self.is_buy_order = is_buy_order
+        self.issued = issued
+        self.location_id = location_id
+        self.min_volume = min_volume
+        self.order_id = order_id
+        self.price = price
+        self._range = _range
+        self.system_id = system_id
+        self.timestamps = timestamps
+        self.type_id = type_id
+        self.volume_remain = volume_remain
+        self.volume_total = volume_total
+        return
+    
+    def mean_price(self):
+        '''
+        
+        Calculates the average of all prices identified for this order.
+        '''
+        prices = [price for price in self.price]
+        average_price = np.mean(prices)
+        return average_price
+    
+    def delta_price(self):
+        '''
+        Calculates total change in listed price since order creation.
+        '''
+        prices = [price for price in self.price]
+        if len(prices) < 2:
+            price_change = None
+        else:
+            price_change = prices[-1] - prices[0]
+        return price_change
+    
+    def age(self):
+        '''
+        Calculates total age of order since issuance.
+        '''
+        now = datetime.datetime.now()
+        order_age = now - self.issued
+        return order_age
+    
+class Report:
+    '''
+    Object for organization and handling of Sleeper data for the purposes
+    of compilation of aggregate data into a meaningful format. 
+    '''
+    
+    def __init__(self):
+        self.data = {}
+        self.metrics = {}
+        self.figures = {}
+        return
