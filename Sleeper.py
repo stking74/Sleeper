@@ -61,7 +61,7 @@ class Sleeper():
             for name, data in self.region_list.items():
                 self.region_list[name]['constellations'] = list(self.region_list[name]['constellations'])
             i += 1
-        return
+        return self.region_list
     
     def market_dump(self):
         
@@ -180,9 +180,10 @@ class Sleeper():
                 fname, ext = item.split('.')
                 if ext == 'pik':
                     weekly_dumps.append(item)
-        catalog = []
+        region_list = self._update_region_list()
+        catalog = {key:[] for key in region_list.keys()}
         order_ids = set()
-        order_id_list = []
+        order_id_list = {key:[] for key in region_list.keys()}
         previous_length = 0
         for file in weekly_dumps:
             f_timestamp = file[12:22]
@@ -192,24 +193,24 @@ class Sleeper():
                 with open(file, 'rb') as f:
                     data_dump = pickle.load(f)
                 for key, region in data_dump.items():
-                    print('%s: %i'%(key, len(region)))
+                    region_catalog = catalog[key]
+                    ti = time.time()
                     oids = [order['order_id'] for order in region]
                     for order in region:
-                        ti = time.time()
                         oid = order['order_id']
                         if oid not in order_ids:
                             order_ids.add(oid)
-                            order_id_list.append(oid)
+                            order_id_list[key].append(oid)
                             order['volume_remain'] = [order['volume_remain']]
                             try:
                                 order['timestamps'] = [order['timestamps']]
                             except KeyError:
                                 order['timestamps'] = [timestamp]
                             order['price'] = [order['price']]
-                            catalog.append(order)
+                            region_catalog.append(order)
                         else:
-                            i = order_id_list.index(oid)
-                            check = catalog[i]
+                            i = order_id_list[key].index(oid)
+                            check = region_catalog[i]
                             cid = check['order_id']
                             if cid == oid:
                                 check['volume_remain'].append(order['volume_remain'])
@@ -218,15 +219,15 @@ class Sleeper():
                                     check['timestamps'].append(order['timestamps'])
                                 except KeyError:
                                     check['timestamps'].append(timestamp)
-                                catalog[i] = check
-                                te = time.time() - ti
-#                                print(oid, len(order_ids), te)
+                                region_catalog[i] = check
+#                               print(oid, len(order_ids), te)
                                 continue
-                        te = time.time() - ti
+                    te = time.time() - ti
+                    print('%s: %i %f'%(key, len(region), te))
 #                        print(oid, len(order_ids), te)
-            running_length = len(catalog)
-            print('Current catalog length:', running_length)
-            new_orders = running_length - previous_length
-            previous_length = running_length
-            print('Added',new_orders,'new orders.')
+                running_length = sum(len(region) for region in catalog)
+                print('Current catalog length:', running_length)
+                new_orders = running_length - previous_length
+                previous_length = running_length
+                print('Added',new_orders,'new orders.')
         return catalog
