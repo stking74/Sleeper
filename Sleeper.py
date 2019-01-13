@@ -67,29 +67,36 @@ class Sleeper():
     def market_dump(self):
         
         def _request_region_market_orders(region_id=10000002, type_id=34, order_type='all'):
-            page = 1
-            while True:
-                operation = self.app.op['get_markets_region_id_orders'](region_id=region_id, order_type=order_type, page=page)
-                response = self.client.request(operation)
-                pull_time = datetime.datetime.now()
-                time.sleep(0.25)
-                if page == 1:
-                    orders = [dict(entry) for entry in response.data]
-                    for order in orders:
-                        order['timestamps'] = pull_time
-                    if len(orders)==0:
+            orders = []
+            op = self.app.op['get_markets_region_id_orders'](
+                    region_id = region_id,
+                    page=1,
+                    order_type=order_type)
+            res = self.client.head(op)
+            if res.status == 200:
+                n_pages = res.header['X-Pages'][0]
+                operations = []
+                for page in range(1, n_pages+1):
+                    operations.append(
+                            self.app.op['get_markets_region_id_orders'](
+                                    region_id=region_id,
+                                    page=page,
+                                    order_type=order_type)
+                            )
+                while True:
+                    response = self.client.multi_request(operations)
+                    pull_time = datetime.datetime.now()
+                    r_codes = [packet[1].status for packet in response]
+                    success = [code == 200 for code in r_codes]
+                    if all(success):
                         break
-                    page += 1
-                    continue
-                else:
-                    new_orders = [dict(entry) for entry in response.data]
-                    for order in new_orders:
-                        order['timestamps'] = pull_time
-                    if len(new_orders) == 0:
-                        break
-                    for entry in new_orders:
+                
+                for packet in response:
+                    packet_data = packet[1].data
+                    for entry in packet_data:
+                        entry = dict(entry)
+                        entry['timestamps'] = pull_time
                         orders.append(entry)
-                page += 1
             return orders
         
         orders = {}
