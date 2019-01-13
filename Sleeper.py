@@ -49,6 +49,7 @@ class Sleeper():
         operation = self.app.op['get_universe_regions']()
         response = self.client.request(operation)
         region_ids = response.data
+        response_header = response.header
         self.region_list = {}
         i = 1
         for region_id in region_ids:
@@ -193,67 +194,92 @@ class Sleeper():
     def _new_settings_file_():
         return
     
-    def _aggregate_weekly_(self):
-        week_ago = datetime.datetime.now() - datetime.timedelta(days=7)
-        weekly_dumps = []
-        os.chdir(self.store_dir)
-        contents = os.listdir(self.store_dir)
+    def _agregate_range_(self, low, high):
+        
+        if type(low)==str:
+            low = datetime.datetime.strptime(low, '%Y-%m-%d')
+        if type(high)==str:
+            high = datetime.datetime.strptime(high, '%Y-%m-%d')
+        dir_dump = os.listdir(self.store_dir)
+        
         files = []
-        for item in contents:
+        for item in dir_dump:
+            item = os.path.join(self.store_dir, item)
             if os.path.isfile(item):
-                fname, ext = item.split('.')
-                if ext == 'pik':
-                    weekly_dumps.append(item)
-        region_list = self._update_region_list()
-        catalog = {key:[] for key in region_list.keys()}
+                if item.split('.')[1] == 'pik':
+                    files.append(os.path.basename(item))
+        file_timestamps = [datetime.datetime.strptime(fname[12:22],'%Y-%m-%d') for fname in files]
+        range_ts = []
+        for ts in file_timestamps:
+            if ts >= low and ts <= high:
+                range_ts.append(ts)
+        range_files = ['market_dump-%s.pik'%(datetime.datetime.strftime(ts,'%Y-%m-%d')) for ts in range_ts]
+        
+        catalog = {key:[] for key in self.region_list.keys()}
         order_ids = set()
-        order_id_list = {key:[] for key in region_list.keys()}
+        order_id_list = {key:[] for key in self.region_list.keys()}
         previous_length = 0
-        for file in weekly_dumps:
+        
+        for file in range_files:
             f_timestamp = file[12:22]
             timestamp = datetime.datetime.strptime(f_timestamp, '%Y-%m-%d')
-            if timestamp > week_ago:
-                print('loading file:', file)
-                with open(file, 'rb') as f:
-                    data_dump = pickle.load(f)
-                for key, region in data_dump.items():
-                    region_catalog = catalog[key]
-                    ti = time.time()
-                    oids = [order['order_id'] for order in region]
-                    for order in region:
-                        oid = order['order_id']
-                        if oid not in order_ids:
-                            order_ids.add(oid)
-                            order_id_list[key].append(oid)
-                            order['volume_remain'] = [order['volume_remain']]
+            print('loading file:', file)
+            file = os.path.join(self.store_dir, file)
+            with open(file, 'rb') as f:
+                data_dump = pickle.load(f)
+                
+            for key, region in data_dump.items():
+                region_catalog = catalog[key]
+                new_catalog = []
+                for order in region:
+                    duration = order['duration']
+                    is_buy_order = order['is_buy_order']
+                    issued = order['issued']
+                    location_id = order['location_id']
+                    min_volume = order['min_volume']
+                    order_id = order['order_id']
+                    price = order['price']
+                    _range = order['range']
+                    system_id = order['system_id']
+                    timestamps = order['timestamps']
+                    type_id = order['type_id']
+                    volume_remain = int(order['volume_remain'])
+                    volume_total = order['volume_total']
+                    new_catalog.append(Order(duration, is_buy_order, issued, location_id, min_volume,
+                                 order_id, price, _range, system_id, timestamps, type_id,
+                                 volume_remain, volume_total))
+                
+                for order in new_catalog:
+                    oid = order.order_id
+                    if oid not in order_ids:
+                        order_ids.add(oid)
+                        order_id_list[key].append(oid)
+                        order.volume_remain = [order.volume_remain]
+                        try:
+                            order.timestamps = [order.timestamps]
+                        except KeyError:
+                            order.timestamps = [timestamp]
+                        order.price = [order.price]
+                        region_catalog.append(order)
+                    else:
+                        i = np.where(np.array(order_id_list[key]) == oid)[0][0]
+                        check = region_catalog[i]
+                        cid = check.order_id
+                        if cid == oid:
+                            check.volume_remain.append(order.volume_remain)
+                            check.price.append(order.price)
                             try:
-                                order['timestamps'] = [order['timestamps']]
+                                check.timestamps.append(order.timestamps)
                             except KeyError:
-                                order['timestamps'] = [timestamp]
-                            order['price'] = [order['price']]
-                            region_catalog.append(order)
-                        else:
-                            i = order_id_list[key].index(oid)
-                            check = region_catalog[i]
-                            cid = check['order_id']
-                            if cid == oid:
-                                check['volume_remain'].append(order['volume_remain'])
-                                check['price'].append(order['price'])
-                                try:
-                                    check['timestamps'].append(order['timestamps'])
-                                except KeyError:
-                                    check['timestamps'].append(timestamp)
-                                region_catalog[i] = check
-#                               print(oid, len(order_ids), te)
-                                continue
-                    te = time.time() - ti
-                    print('%s: %i %f'%(key, len(region), te))
-#                        print(oid, len(order_ids), te)
-                running_length = sum(len(region) for region in catalog)
-                print('Current catalog length:', running_length)
-                new_orders = running_length - previous_length
-                previous_length = running_length
-                print('Added',new_orders,'new orders.')
+                                check.timestamps.append(timestamp)
+                            region_catalog[i] = check
+#                              print(oid, len(order_ids), te)
+                            continue
+            running_length = len(order_ids)
+            print('Current catalog length:', running_length)
+            new_orders = running_length - previous_length
+            previous_length = running_length
+            print('Added',new_orders,'new orders.')
         return catalog
 
 class Order:
@@ -371,9 +397,10 @@ class Reporter:
         import datetime
         
         #Data read-in and organization, and analysis setup
-        today = datetime.datetime.today().date()
+        if date == None:
+            today = datetime.datetime.today().date()
+        else: today = date
         yesterday = today - datetime.timedelta(days=1)
-        no_previous_data = False
         valid_files = []
         # Identify most recently produced data dump
         for root, dirs, files in os.walk(self.data_dir):
@@ -385,15 +412,11 @@ class Reporter:
                         valid_files.append((filename, timestamp))
                     except:
                         continue
-        if len(valid_files) > 1:
-            most_recent = valid_files[0]
-            for f in valid_files[1:]:
-                if f[1] > most_recent[1]:
-                    most_recent = f
-        else:
-            most_recent = valid_files[0]
+        for (fname, timestamp) in valid_files:
+            if timestamp == today:
+                most_recent = (fname, timestamp)
+                break
         most_recent_fname = most_recent[0]
-        ##### Keep everything below this line in a state where it can be copy-pasted into retroactive report generator script
         timestamp = most_recent[1]
         newdir_name = 'sleeper_daily_'+most_recent_fname[12:22]
         report_dir = os.path.join(self.report_dir, newdir_name)
@@ -638,37 +661,23 @@ class Reporter:
         uncompressed_metrics = [key for key in ore_data['Arkonor'].keys()]
         compressed_metrics = [key for key in ore_data['Compressed Arkonor'].keys()]
         for key, ore_group in ore_groups.items():
-            lines = []
             ws = wb.create_sheet(key)
-            ws.cell(1,1,'Ore')
-            ws.cell(2,1,'Uncompressed')
-            for column, value in enumerate(uncompressed_metrics):
-                if value == 'figures':
-                    continue
-                column += 2
-                ws.cell(2, column, value)
-            for row, ore_name in enumerate(ore_group['Uncompressed']):
-                ws.cell(row+3, 1, ore_name)
-                ore_report = ore_data[ore_name]
-                for column, (key, value) in enumerate(ore_report.items()):
-                    if key == 'figures':
-                        continue
-                    column += 2
-                    ws.cell(row+3, column, value)
-            ws.cell(7,1,'Compressed')
-            for column, value in enumerate(uncompressed_metrics):
-                if value == 'figures':
-                    continue
-                column += 2
-                ws.cell(7, column, value)
-            for row, ore_name in enumerate(ore_group['Compressed']):
-                ws.cell(row+8, 1, ore_name)
-                ore_report = ore_data[ore_name]
-                for column, (key, value) in enumerate(ore_report.items()):
-                    if key == 'figures':
-                        continue
-                    column += 2
-                    ws.cell(row+8, column, value)
+            lines = [['Ore'],
+                     ['Uncompressed','']+uncompressed_metrics[1:]]
+            for ore_type in ore_group['Uncompressed']:
+                newline = [ore_type,'']
+                for metric in uncompressed_metrics[1:]:
+                    newline.append(ore_data[ore_type][metric])
+                lines.append(newline)
+            if key == 'Mercoxit': lines.append([''])
+            lines.append(['Compressed','']+compressed_metrics[1:])
+            for ore_type in ore_group['Compressed']:
+                newline = [ore_type,'']
+                for metric in compressed_metrics[1:]:
+                    newline.append(ore_data[ore_type][metric])
+                lines.append(newline)
+            if key == 'Mercoxit': lines.append([''])
+            self.list2sheet(lines, ws)
         # Summary sheet
         summary_sheet.title = 'Summary'
         summary_header = ['','Ore Group', 'Max Sec', 'Group Average Unit Sell Price',
@@ -685,19 +694,19 @@ class Reporter:
         min_row = 2
         min_column = 3
         max_column = 2 + len(uncompressed_metrics)
+        max_row = 6
         for ore_group in categorical_column:
             new_row = ['',ore_group]
             if ore_group in ore_group_names:
                 new_row.append(max_sec[ore_group])
                 group_sheet = wb[ore_group]
-                if ore_group == 'Mercoxit': max_row = 5 
-                else: max_row = 6
                 ore_metrics = {}
                 for col in range(min_column, max_column):
                     col_data = [group_sheet.cell(row=row_n, column=col).value for row_n in range(min_row, max_row+1)]
                     header = col_data[0]
                     col_entries = col_data[1:]
-                    ore_metrics[header] = col_entries
+                    if ore_group == 'Mercoxit': ore_metrics[header] = col_entries[:-1]
+                    else: ore_metrics[header] = col_entries
                 group_data = {}
                 # Read in base data
                 group_data['global_current_prices'] = np.mean(ore_metrics['global_current_prices'])
@@ -734,6 +743,7 @@ class Reporter:
         lines.append(summary_header)
         lines.append([''])
         min_row = 7
+        max_row = 11
         min_column = 3
         max_column = 2 + len(compressed_metrics)
         for ore_group in categorical_column:
@@ -741,15 +751,14 @@ class Reporter:
             if ore_group in ore_group_names:
                 new_row.append(max_sec[ore_group])
                 group_sheet = wb[ore_group]
-                if ore_group == 'Mercoxit': 
-                    max_row = 10
-                else: max_row = 11
                 ore_metrics = {}
                 for col in range(min_column, max_column):
                     col_data = [group_sheet.cell(row=row_n, column=col).value for row_n in range(min_row, max_row+1)]
                     header = col_data[0]
                     col_entries = col_data[1:]
-                    ore_metrics[header] = col_entries
+#                    ore_metrics[header] = col_entries
+                    if ore_group == 'Mercoxit': ore_metrics[header] = col_entries[:-1]
+                    else: ore_metrics[header] = col_entries
                 group_data = {}
                 # Read in base data
                 group_data['global_current_prices'] = np.mean(ore_metrics['global_current_prices'])
