@@ -111,6 +111,30 @@ class Sleeper():
         
         return
     
+    def _load_dumpfile_(self, fname):
+        with open(fname, 'rb') as f:
+            raw_catalog = pickle.load(f)  
+        print('Cataloging orders...')
+        catalog = []
+        for key, region in raw_catalog.items():
+            for order in region:
+                duration = order['duration']
+                is_buy_order = order['is_buy_order']
+                issued = order['issued']
+                location_id = order['location_id']
+                min_volume = order['min_volume']
+                order_id = order['order_id']
+                price = order['price']
+                _range = order['range']
+                system_id = order['system_id']
+                timestamps = order['timestamps']
+                type_id = order['type_id']
+                volume_remain = int(order['volume_remain'])
+                volume_total = order['volume_total']
+                catalog.append(Order(duration, is_buy_order, issued, location_id, min_volume,
+                             order_id, price, _range, system_id, timestamps, type_id,
+                             volume_remain, volume_total))
+        return catalog
     
     
     def aggregate_data(self, data_directory):
@@ -328,7 +352,19 @@ class Reporter:
         self.report_dir = report_dir
         return
     
-    def generate_daily_report(self):
+    def list2sheet(self, list_data, worksheet):
+        '''
+        Converts a list of lists into a formatted openpyxl worksheet, with each nested
+        list representing a separate row of the final worksheet
+        '''
+        for row, data in enumerate(list_data):
+            row += 1
+            for column, value in enumerate(data):
+                column += 1
+                worksheet.cell(row=row, column=column, value=value)
+        return worksheet
+    
+    def generate_daily_report(self, date=None):
         import openpyxl as op
         import scipy.stats as stats
         import matplotlib.pyplot as plt
@@ -801,6 +837,6 @@ class Reporter:
                     continue
                 column += 2
                 ws.cell(row+15, column, value)
-        ore_report_fname = 'Sleeper_iceReport_daily_'+str(timestamp)+'.xlsx'
+        ore_report_fname = 'Sleeper_iceReport_daily_'+str(today_timestamp)+'.xlsx'
         ore_report_fname = os.path.join(report_dir, ore_report_fname)
         wb.save(ore_report_fname)
