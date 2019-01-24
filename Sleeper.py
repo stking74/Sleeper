@@ -5,6 +5,7 @@ import datetime
 import time
 import numpy as np
 import pickle
+import json
 import os
 
 def crawldir(topdir=[], ext='sxm'):
@@ -30,6 +31,10 @@ def crawldir(topdir=[], ext='sxm'):
 class Sleeper():
     
     def __init__(self):
+        '''
+        Initialize Sleeper class. Initializes instance of ESI Swagger interfacial
+        app, updates relevant metadata, declares 
+        '''
         print('Initiailizing app...')
         self.esi_app = api.EsiApp()
         print('Updating swagger...')
@@ -41,6 +46,12 @@ class Sleeper():
         self.root_dir = os.getcwd()
         self.store_dir = os.path.join(self.root_dir, 'data_dumps')
         self.settings_fname = 'sleeper_settings.sl'
+        return
+    
+    @staticmethod
+    def _save_catalog_(filename, catalog):
+        with open(filename, 'w') as f:
+            json.dump(catalog._decompose_(), f)
         return
     
     def _update_region_list(self):
@@ -64,42 +75,86 @@ class Sleeper():
             i += 1
         return self.region_list
     
+    @staticmethod
+    def _rawentry2order_(rawentry, timestamp):
+        '''
+        Converts raw returned data entry from SwaggerAPI to Order object
+        '''
+        duration = rawentry['duration']
+        is_buy_order = rawentry['is_buy_order']
+        issued = rawentry['issued']
+        location_id = rawentry['location_id']
+        min_volume = rawentry['min_volume']
+        order_id = rawentry['order_id']
+        price = rawentry['price']
+        _range = rawentry['range']
+        system_id = rawentry['system_id']
+        timestamps = [timestamp]
+        type_id = rawentry['type_id']
+        volume_remain = int(rawentry['volume_remain'])
+        volume_total = rawentry['volume_total']
+        order = Order(duration, is_buy_order, issued, location_id, min_volume,
+                      order_id, price, _range, system_id, timestamps, type_id,
+                      volume_remain, volume_total)
+        return order
+    
+    @staticmethod
+    def dict2order(dictionary):
+        strptime_template = '%Y-%m-%d %H:%M:%S.%f'
+        duration = dictionary['duration']
+        is_buy_order = dictionary['is_buy_order']
+        issued = datetime.datetime.strptime(dictionary['issued'], strptime_template)
+        location_id = dictionary['location_id']
+        min_volume = dictionary['min_volume']
+        order_id = dictionary['order_id']
+        price = dictionary['price']
+        _range = dictionary['range']
+        system_id = dictionary['system_id']
+        timestamps = [datetime.datetime.strptime(ts, strptime_template) for ts in dictionary['timestamps']]
+        type_id = dictionary['type_id']
+        volume_remain = dictionary['volume_remain']
+        volume_total = dictionary['volume_total']
+        order = Order(duration, is_buy_order, issued, location_id, min_volume,
+                      order_id, price, _range, system_id, timestamps, type_id,
+                      volume_remain, volume_total)
+        return order
+    
     def market_dump(self):
+        '''
+        Scrapes full current market data, saves to .sld archive file. File is
+        formatted as a tuple containing a decomposed catalog and a dump timestamp
+        '''
         
         def _request_region_market_orders(region_id=10000002, type_id=34, order_type='all'):
-            orders = []
-            op = self.app.op['get_markets_region_id_orders'](
+            
+            while True:
+                op = self.app.op['get_markets_region_id_orders'](
                     region_id = region_id,
                     page=1,
                     order_type=order_type)
-            res = self.client.head(op)
-            if res.status == 200:
-                n_pages = res.header['X-Pages'][0]
-                operations = []
-                for page in range(1, n_pages+1):
-                    operations.append(
-                            self.app.op['get_markets_region_id_orders'](
-                                    region_id=region_id,
-                                    page=page,
-                                    order_type=order_type)
-                            )
-                while True:
-                    response = self.client.multi_request(operations)
-                    pull_time = datetime.datetime.now()
-                    r_codes = [packet[1].status for packet in response]
-                    success = [code == 200 for code in r_codes]
-                    if all(success):
-                        break
-                
-                for packet in response:
-                    packet_data = packet[1].data
-                    for entry in packet_data:
-                        entry = dict(entry)
-                        entry['timestamps'] = pull_time
-                        orders.append(entry)
+                res = self.client.head(op)
+                if res.status == 200:
+                    n_pages = res.header['X-Pages'][0]
+                    operations = []
+                    for page in range(1, n_pages+1):
+                        operations.append(
+                                self.app.op['get_markets_region_id_orders'](
+                                        region_id=region_id,
+                                        page=page,
+                                        order_type=order_type)
+                                )
+                    while True:
+                        response = self.client.multi_request(operations)
+                        pull_time = datetime.datetime.now()
+                        r_codes = [packet[1].status for packet in response]
+                        success = [code == 200 for code in r_codes]
+                        if all(success):
+                            break
+                    orders = Catalog._rawdump2catalog_(response, pull_time)
+                    break
             return orders
         
-        orders = {}
+        master_catalog = Catalog()
         print('Scraping market data')
         print('Region:')
         for region in self.region_list.items():
@@ -107,189 +162,167 @@ class Sleeper():
             name, region_data = region
             print(name)
             region_id = region_data['region_id']
-            orders[name] = _request_region_market_orders(region_id, order_type='all')
+            region_dump = _request_region_market_orders(region_id, order_type='all')
+            master_catalog += region_dump
+        
+        decomposed_catalog = master_catalog._decompose_()
         refresh_time = datetime.datetime.now()
-        filename_timestamp = refresh_time.strftime('%c')
-        os.chdir(self.store_dir)
-        pik_filename = 'market_dump-'+str(refresh_time)[:10]+'.pik'
-        pik_file = open(pik_filename, 'wb')
-        pickle.dump(orders, pik_file)
-        pik_file.close()
-        os.chdir(self.root_dir)
+        pik_filename = 'market_dump-'+str(refresh_time)[:-7]+'.sld'
+        pik_filename = [c for c in pik_filename]
+        pik_filename[25] = '-'
+        pik_filename[28] = '-'
+        pik_filename = ''.join(pik_filename)
+        pik_filename = os.path.join(self.store_dir, pik_filename)
+        dump_contents = (decomposed_catalog, str(refresh_time))
+        Sleeper._save_dumpfile_(dump_contents, pik_filename)
         
+        print('DONE')
+        
+        return master_catalog
+    
+    @staticmethod
+    def _save_dumpfile_(payload, filename):
+        f = open(filename, 'wb')
+        f.write(payload)
+        f.close()
         return
     
-    def _load_dumpfile_(self, fname):
+    @staticmethod
+    def _load_dumpfile_(fname):
         with open(fname, 'rb') as f:
-            raw_catalog = pickle.load(f)  
-        print('Cataloging orders...')
-        catalog = []
-        for key, region in raw_catalog.items():
-            for order in region:
-                duration = order['duration']
-                is_buy_order = order['is_buy_order']
-                issued = order['issued']
-                location_id = order['location_id']
-                min_volume = order['min_volume']
-                order_id = order['order_id']
-                price = order['price']
-                _range = order['range']
-                system_id = order['system_id']
-                timestamps = order['timestamps']
-                type_id = order['type_id']
-                volume_remain = int(order['volume_remain'])
-                volume_total = order['volume_total']
-                catalog.append(Order(duration, is_buy_order, issued, location_id, min_volume,
-                             order_id, price, _range, system_id, timestamps, type_id,
-                             volume_remain, volume_total))
-        return catalog
+            decomposed_catalog, dump_timestamp = json.load(f)
+        raw_catalog = Sleeper.recompose(decomposed_catalog)
+        return raw_catalog
     
-    
-    def aggregate_data(self, data_directory):
-        print('Aggregating order data...')
-        data_directory_contents = os.listdir(data_directory)
-        split_contents = [item.split('.') for item in data_directory_contents]
-        target_file_list = []
-        for idx, item in enumerate(split_contents):
-            if item[1] == 'pik':
-                target_file_list.append(data_directory_contents[idx])
-        aggregated_raw_data = {}
-        for file in target_file_list:
-            pull_date = file[12:22]
-            file = os.path.join(data_directory, file)
-            with open(file, 'rb') as pik_file:
-                pickle_data = pickle.load(pik_file)
-            aggregated_raw_data[pull_date] = pickle_data
+    @staticmethod
+    def recompose(decomposed_catalog):
+        rebuilt = Catalog()
+        for order in decomposed_catalog:
+            new_order = Sleeper.dict2order(order)
+            rebuilt[new_order.id] = new_order
+        return rebuilt
         
-        print('Extracting order IDs...')
-        order_catalog = {}
-        for date in aggregated_raw_data.values():
-            for region in date.values():
-                for order in region:
-                    order_id = str(order['order_id'])
-                    if order_id in order_catalog.keys():
-                        order_catalog[order_id].append(order)
-                    else:
-                        order_catalog[order_id] = [order]
-        '''
-        order_ids = list(set(order_ids))
-
-        orders = {}
-        for order_id in order_ids:
-            new_key = str(order_id)
-            orders[new_key] = {}
-            
-        print('Cataloging orders...')
-        for idx, order_id in enumerate(orders.keys()):
-            for date in aggregated_raw_data.values():
-                for region in date.values():
-                    for order in region:
-                        #!!! This if condition below is not working as intended
-                        if order['order_id'] == order_id:
-                            orders[order_id].append(order)
-            if idx % 1000 == 0:
-                print(int(idx),'/',len(orders))
-        '''
-        return order_catalog
-    
-    def _load_settings_file_(self):
-        dir_dump = crawldir(self.root_dir, 'sl')
-        if len(dir_dump) == 0:
-            self._new_settings_file_()
-        return
-    
-    def _new_settings_file_():
-        return
-    
-    def _agregate_range_(self, low, high):
+    def _agregate_range_(self, low, high=None):
+        
+        # If no high is given, set high equal to low. Equivalence is handled later
+        strptime_template = '%Y-%m-%d %H:%M:%S'
+        
+        if high == '':
+            high = low
         
         if type(low)==str:
-            low = datetime.datetime.strptime(low, '%Y-%m-%d')
+            low = datetime.datetime.strptime(low, strptime_template)
         if type(high)==str:
-            high = datetime.datetime.strptime(high, '%Y-%m-%d')
+            high = datetime.datetime.strptime(high, strptime_template)
         dir_dump = os.listdir(self.store_dir)
         
         files = []
         for item in dir_dump:
             item = os.path.join(self.store_dir, item)
             if os.path.isfile(item):
-                if item.split('.')[1] == 'pik':
+                if item.split('.')[1] == 'sld':
                     files.append(os.path.basename(item))
-        file_timestamps = [datetime.datetime.strptime(fname[12:22],'%Y-%m-%d') for fname in files]
+        file_timestamps = [datetime.datetime.strptime(fname[12:31],'%Y-%m-%d %H-%M-%S') for fname in files]
+        
         range_ts = []
-        for ts in file_timestamps:
-            if ts >= low and ts <= high:
-                range_ts.append(ts)
-        range_files = ['market_dump-%s.pik'%(datetime.datetime.strftime(ts,'%Y-%m-%d')) for ts in range_ts]
         
-        catalog = {key:[] for key in self.region_list.keys()}
+        #If high == low, load only file with timestamp == low
+        if high == low:
+            range_ts.append(file_timestamps.index(low))
+        # Else load all files with timestamps between from low to high, inclusive
+        else:
+            for idx, ts in enumerate(file_timestamps):
+                if ts >= low and ts <= high:
+                    range_ts.append(idx)
+        
+        range_files = [files[i] for i in range_ts]
+        
+        ti = time.time()
+        
+        master_catalog = {key:Catalog() for key in self.region_list.keys()}
+        for fname in range_files:
+            print('loading file:', fname)
+            fname = os.path.join(self.store_dir, fname)
+            raw_dump_data, rawdump_ts = Sleeper._load_dumpfile_(fname)
+            for key, old_catalog in master_catalog.items():
+                new_catalog = raw_dump_data[key]
+                Sleeper._merge_catalogs_(old_catalog, new_catalog)
+                
+        dt = time.time() - ti
+        print('loaded %i files, %i orders in %f seconds'%(len(range_files), np.sum([len(catalog) for catalog in master_catalog.values()]), dt))
+                
+        return master_catalog
+    
+    def filter_catalog(self, catalog, criteria, value):
+        '''
+        Input:
+        --------
+            catalog : list of Sleeper.Order objects
+            
+            criteria : str
+            
+            value : str
+        '''
+        matching_orders = []
+        criteria = criteria.upper()
+        if criteria=='DURATION':
+            critcheck = [order['duration'] for order in catalog]
+            value = int(value)
+        elif criteria=='IS_BUY_ORDER':
+            critcheck = [order.is_buy_order for order in catalog]
+            value = bool(value)
+        elif criteria=='ISSUED':
+            critcheck = [order.issued for order in catalog]
+            value = datetime.datetime.strptime(value, '%Y-%m-%d')
+        elif criteria=='LOCATION_ID':
+            critcheck = [order.location_id for order in catalog]
+            value = int(value)
+        elif criteria=='MIN_VOLUME':
+            critcheck = [order.min_volume for order in catalog]
+            value = int(value)
+        elif criteria=='ORDER_ID':
+            critcheck = [order.order_id for order in catalog]
+            value = int(value)
+        elif criteria=='PRICE':
+            critcheck = [order.price[-1] for order in catalog]
+            value = float(value)
+        elif criteria=='RANGE':
+            critcheck = [order._range for order in catalog]
+        elif criteria=='SYSTEM_ID':
+            critcheck = [order.system_id for order in catalog]
+            value = int(value)
+        elif criteria=='TIMESTAMPS':
+            critcheck = [order.timestamps[-1] for order in catalog]
+            value = datetime.datetime.strptime(value, '%Y-%m-%d')
+        elif criteria=='TYPE_ID':
+            critcheck = [order.type_id for order in catalog]
+            value = int(value)
+        elif criteria=='VOLUME_REMAIN':
+            critcheck = [order.volume_remain for order in catalog]
+            value = int(value)
+        elif criteria=='VOLUME_TOTAL':
+            critcheck = [order.volume_total for order in catalog]
+            value = int(value)
+        else:
+            raise KeyError('Criteria not recognized')
+        
+        match_indices = []
+        for idx, val in enumerate(critcheck):
+            if val == value:
+                matching_orders.append(catalog[idx])
+        
+        return filtered_catalog
+    
+    def strip_duplicates(catalog):
+        stripped_catalog = []
         order_ids = set()
-        order_id_list = {key:[] for key in self.region_list.keys()}
-        previous_length = 0
+        for order in catalog:
+            if order.order_id not in order_ids:
+                stripped_catalog.append(order)
+        return stripped_catalog
         
-        for file in range_files:
-            f_timestamp = file[12:22]
-            timestamp = datetime.datetime.strptime(f_timestamp, '%Y-%m-%d')
-            print('loading file:', file)
-            file = os.path.join(self.store_dir, file)
-            with open(file, 'rb') as f:
-                data_dump = pickle.load(f)
-                
-            for key, region in data_dump.items():
-                region_catalog = catalog[key]
-                new_catalog = []
-                for order in region:
-                    duration = order['duration']
-                    is_buy_order = order['is_buy_order']
-                    issued = order['issued']
-                    location_id = order['location_id']
-                    min_volume = order['min_volume']
-                    order_id = order['order_id']
-                    price = order['price']
-                    _range = order['range']
-                    system_id = order['system_id']
-                    timestamps = order['timestamps']
-                    type_id = order['type_id']
-                    volume_remain = int(order['volume_remain'])
-                    volume_total = order['volume_total']
-                    new_catalog.append(Order(duration, is_buy_order, issued, location_id, min_volume,
-                                 order_id, price, _range, system_id, timestamps, type_id,
-                                 volume_remain, volume_total))
-                
-                for order in new_catalog:
-                    oid = order.order_id
-                    if oid not in order_ids:
-                        order_ids.add(oid)
-                        order_id_list[key].append(oid)
-                        order.volume_remain = [order.volume_remain]
-                        try:
-                            order.timestamps = [order.timestamps]
-                        except KeyError:
-                            order.timestamps = [timestamp]
-                        order.price = [order.price]
-                        region_catalog.append(order)
-                    else:
-                        i = np.where(np.array(order_id_list[key]) == oid)[0][0]
-                        check = region_catalog[i]
-                        cid = check.order_id
-                        if cid == oid:
-                            check.volume_remain.append(order.volume_remain)
-                            check.price.append(order.price)
-                            try:
-                                check.timestamps.append(order.timestamps)
-                            except KeyError:
-                                check.timestamps.append(timestamp)
-                            region_catalog[i] = check
-#                              print(oid, len(order_ids), te)
-                            continue
-            running_length = len(order_ids)
-            print('Current catalog length:', running_length)
-            new_orders = running_length - previous_length
-            previous_length = running_length
-            print('Added',new_orders,'new orders.')
-        return catalog
 
-class Order:
+class Order(dict):
     '''
     Object for handling and organization of order data. Attributes correspond
     to values available from Swagger through regional market order requests. 
@@ -321,7 +354,7 @@ class Order:
                 Distance from location within which transaction may occur
             system_id : int
                 Unique identifier of system in which order was placed, redundant information also provided indirectly by location_id
-            timestamps : list of datetime.datetime objects
+            timestamps : (list of) datetime.datetime object(s)
                 Timestamps for each market dump in which order was located
             type_id : int
                 Unique identifier for type of item being sold/bought in order
@@ -330,27 +363,98 @@ class Order:
             volume_total : int
                 Total number of units available/desired at order creation
         '''
-        self.duration = duration
-        self.is_buy_order = is_buy_order
-        self.issued = issued
-        self.location_id = location_id
-        self.min_volume = min_volume
-        self.order_id = order_id
-        self.price = price
-        self._range = _range
-        self.system_id = system_id
-        self.timestamps = timestamps
-        self.type_id = type_id
-        self.volume_remain = volume_remain
-        self.volume_total = volume_total
+        self['duration'] = duration
+        self['is_buy_order'] = is_buy_order
+        self['issued'] = issued
+        self['location_id'] = location_id
+        self['system_id'] = system_id
+        self['min_volume'] = min_volume
+        self.id = order_id
+        self['order_id'] = order_id
+        if type(price) is list:
+            self['price'] = price
+        else:
+            self['price'] = [price]
+        self['range'] = _range
+#        self['system_id'] = system_id
+        if type(timestamps) is list:
+            self['timestamps'] = timestamps
+        else:
+            self['timestamps'] = [timestamps]
+        self['type_id'] = type_id
+        if type(volume_remain) is list:
+            self['volume_remain'] = volume_remain
+        else:
+            self['volume_remain'] = [volume_remain]
+        self['volume_total'] = volume_total
         return
+    
+    @staticmethod
+    def __add__(self, b):
+        return Order._append_order_(self, b)
+    
+    @staticmethod
+    def _append_order_(old_order, new_order):
+        '''
+        Adds the contents of old_order to new_order. Non-container attributes values
+        are pulled from old_order. Container attributes are appended using list.__add__().
+        This means that data in returned order will not be sorted in any way, only treated
+        as a back-to-front chaining of containers.
+        '''
+        if old_order.id == new_order.id:
+            
+            new_order = Order(
+                    old_order['duration'],
+                    old_order['is_buy_order'],
+                    old_order['issued'],
+                    old_order['location_id'],
+                    old_order['min_volume'],
+                    old_order['order_id'],
+                    old_order['price'] + new_order['price'],
+                    old_order['range'],
+                    old_order['system_id'],
+                    old_order['timestamps'] + new_order['timestamps'],
+                    old_order['type_id'],
+                    old_order['volume_remain'] + new_order['volume_remain'],
+                    old_order['volume_total']
+                    )
+            
+            return new_order
+        else:
+            raise ValueError('Order IDs do not match!')
+            return None
+        
+    def _decompose_(self):
+        '''
+        Decompose Order into dictionary which contains all data. Intended as
+        intermediate step for saving order to file individually or as part of
+        catalog dump.
+        '''
+        
+        decomposed_order = {
+                'duration' : self['duration'],
+                'is_buy_order' : self['is_buy_order'],
+                'issued' : str(self['issued']),
+                'location_id' : self['location_id'],
+                'min_volume' : self['min_volume'],
+                'order_id' : self['order_id'],
+                'price' : self['price'],
+                'range' : self['range'],
+                'system_id' : self['system_id'],
+                'timestamps' : [str(timestamp) for timestamp in self['timestamps']],
+                'type_id' : self['type_id'],
+                'volume_remain' : self['volume_remain'],
+                'volume_total' : self['volume_total']
+                }
+        
+        return decomposed_order
     
     def mean_price(self):
         '''
         
         Calculates the average of all prices identified for this order.
         '''
-        prices = [price for price in self.price]
+        prices = [price for price in self['price']]
         average_price = np.mean(prices)
         return average_price
     
@@ -358,7 +462,7 @@ class Order:
         '''
         Calculates total change in listed price since order creation.
         '''
-        prices = [price for price in self.price]
+        prices = [price for price in self['price']]
         if len(prices) < 2:
             price_change = None
         else:
@@ -370,8 +474,65 @@ class Order:
         Calculates total age of order since issuance.
         '''
         now = datetime.datetime.now()
-        order_age = now - self.issued
+        order_age = now - self['issued']
         return order_age
+    
+class Catalog(dict):
+    
+    def __init__(self):
+        self.filters = {}
+        self.orders = self.values
+        return
+    
+    def __add__(self, b):
+        return self._merge_catalogs_(self, b)
+    
+    def _decompose_(self):
+        '''
+        Primitivize catalog to list of dictionaries, for saving as .slc file.
+        Sequentially steps through catalog, decomposing each order to a JSON-
+        compatible dictionary object using the order's _decompose_() method.
+        '''
+        return [order._decompose_() for order in self.orders()]
+    
+    def strip_duplicates(self):
+        '''
+        Removes duplicate orders
+        '''
+        stripped_catalog = Catalog()
+        order_ids = set()
+        for order_id, order in self.items():
+            if order_id not in order_ids:
+                stripped_catalog[order_id] = order
+        return stripped_catalog
+    
+    @staticmethod
+    def _rawdump2catalog_(rawdump, timestamp):
+        catalog = Catalog()
+        for packet in rawdump:
+            packet_data = packet[1].data
+            for entry in packet_data:
+                new_order = Sleeper._rawentry2order_(entry, timestamp)
+                if new_order.id not in catalog:
+                    catalog[new_order.id] = new_order
+                else:
+                    old_order = catalog[new_order.id]
+                    catalog[new_order.id] = Order._append_order_(old_order, new_order)
+        return catalog
+    
+    @staticmethod
+    def _merge_catalogs_(catalog_1, catalog_2):
+        '''
+        Method called by Catalog._add__()
+        '''
+        merged_catalog = catalog_1
+        for order_id, new_order in catalog_2.items():
+            if order_id in merged_catalog:
+                old_order = merged_catalog[order_id]
+                merged_catalog[order_id] = Order._append_order_(old_order, new_order)
+            else:
+                merged_catalog[order_id] = new_order
+        return merged_catalog
     
 class Reporter:
     '''
@@ -397,462 +558,9 @@ class Reporter:
                 worksheet.cell(row=row, column=column, value=value)
         return worksheet
     
-    def generate_daily_report(self, date=None):
-        import openpyxl as op
-        import scipy.stats as stats
-        import matplotlib.pyplot as plt
-        import datetime
+    @staticmethod
+    def generate_report(catalog, *args, **kwds):
         
-        #Data read-in and organization, and analysis setup
-        if date == None:
-            today = datetime.datetime.today().date()
-        else: today = date
-        yesterday = today - datetime.timedelta(days=1)
-        valid_files = []
-        # Identify most recently produced data dump
-        for root, dirs, files in os.walk(self.data_dir):
-            if root == self.data_dir:
-                for filename in files:
-                    try:
-                        f_timestamp = filename[12:22]
-                        timestamp = datetime.datetime.strptime(f_timestamp, '%Y-%m-%d').date()
-                        valid_files.append((filename, timestamp))
-                    except:
-                        continue
-        for (fname, timestamp) in valid_files:
-            if timestamp == today:
-                most_recent = (fname, timestamp)
-                break
-        most_recent_fname = most_recent[0]
-        timestamp = most_recent[1]
-        newdir_name = 'sleeper_daily_'+most_recent_fname[12:22]
-        report_dir = os.path.join(self.report_dir, newdir_name)
-        try:
-            os.mkdir(report_dir)
-        except:
-            pass
-        figure_dir = os.path.join(report_dir,'figures')
-        try:
-            os.mkdir(figure_dir)
-        except:
-            pass
-        print('Loading file: %s'%most_recent_fname)
-        most_recent_fname = os.path.join(self.data_dir, most_recent_fname)
-        with open(most_recent_fname, 'rb') as f:
-            raw_catalog = pickle.load(f)  
-        print('Cataloging orders...')
-        catalog = []
-        for key, region in raw_catalog.items():
-            for order in region:
-                duration = order['duration']
-                is_buy_order = order['is_buy_order']
-                issued = order['issued']
-                location_id = order['location_id']
-                min_volume = order['min_volume']
-                order_id = order['order_id']
-                price = order['price']
-                _range = order['range']
-                system_id = order['system_id']
-                timestamps = order['timestamps']
-                type_id = order['type_id']
-                volume_remain = int(order['volume_remain'])
-                volume_total = order['volume_total']
-                catalog.append(Order(duration, is_buy_order, issued, location_id, min_volume,
-                             order_id, price, _range, system_id, timestamps, type_id,
-                             volume_remain, volume_total))
-        type_ids = np.array([order.type_id for order in catalog])
-        duration_bins = list(set([order.duration for order in catalog]))
-        
-            
-        '''
-        Ores
-        '''
-        print('Aggregating ore data...')
-        report = {}
-        report['Ores'] = {}
-        ore_ids_fname = os.path.join(self.resource_dir, 'ore_ids.txt')
-        with open(ore_ids_fname, 'r') as f:
-            ore_type_ids = {}
-            for line in f:
-                tid, name, extra = line.split(',')
-                ore_type_ids[name] = int(tid)
-        ice_ids_fname = os.path.join(self.resource_dir, 'ice_ids.txt')
-        with open(ice_ids_fname, 'r') as f:
-            ice_type_ids = {}
-            for line in f:
-                tid, name = line.split(',')
-                if '\n' in name:
-                    name = name[:-1]
-                ice_type_ids[name] = int(tid)
-        ore_groups = {'Arkonor':{'Uncompressed':['Arkonor','Crimson Arkonor', 'Prime Arkonor', 'Flawless Arkonor']},
-                      'Bistot':{'Uncompressed':['Bistot', 'Triclinic Bistot', 'Monoclinic Bistot', 'Cubic Bistot']},
-                      'Crokite':{'Uncompressed':['Crokite', 'Sharp Crokite', 'Crystalline Crokite', 'Pellucid Crokite']},
-                      'Ochre':{'Uncompressed':['Dark Ochre', 'Onyx Ochre', 'Obsidian Ochre', 'Jet Ochre']},
-                      'Gneiss':{'Uncompressed':['Gneiss', 'Iridescent Gneiss', 'Prismatic Gneiss', 'Brilliant Gneiss']},
-                      'Hedbergite':{'Uncompressed':['Hedbergite', 'Vitric Hedbergite', 'Glazed Hedbergite', 'Lustrous Hedbergite']},
-                      'Hemorphite':{'Uncompressed':['Hemorphite','Vivid Hemorphite', 'Radiant Hemorphite', 'Scintillating Hemorphite']},
-                      'Jaspet':{'Uncompressed':['Jaspet', 'Pure Jaspet', 'Pristine Jaspet', 'Immaculate Jaspet']},
-                      'Kernite':{'Uncompressed':['Kernite', 'Luminous Kernite', 'Fiery Kernite', 'Resplendant Kernite']},
-                      'Mercoxit':{'Uncompressed':['Mercoxit', 'Magma Mercoxit', 'Vitreous Mercoxit']},
-                      'Omber':{'Uncompressed':['Omber', 'Silvery Omber','Golden Omber','Platinoid Omber']},
-                      'Plagioclase':{'Uncompressed':['Plagioclase', 'Azure Plagioclase', 'Rich Plagioclase', 'Sparkling Plagioclase']},
-                      'Pyroxeres':{'Uncompressed':['Pyroxeres', 'Solid Pyroxeres', 'Viscous Pyroxeres', 'Opulent Pyroxeres']},
-                      'Scordite':{'Uncompressed':['Scordite','Condensed Scordite', 'Massive Scordite', 'Glossy Scordite']},
-                      'Spodumain':{'Uncompressed':['Spodumain', 'Bright Spodumain', 'Gleaming Spodumain', 'Dazzling Spodumain']},
-                      'Veldspar':{'Uncompressed':['Veldspar', 'Concentrated Veldspar', 'Dense Veldspar', 'Stable Veldspar']}}
-        max_sec = {'Veldspar':1.0,'Scordite':1.0,'Pyroxeres':0.9,'Plagioclase':0.8,
-                   'Omber':0.7,'Kernite':0.6,'Jaspet':0.4,'Hemorphite':0.2,'Hedbergite':0.2,
-                   'Gneiss':-0.4,'Ochre':-0.2,'Spodumain':-0.5,'Crokite':-0.5,'Bistot':-0.6,
-                   'Arkonor':-0.7,'Mercoxit':-0.8}
-        for ore_group in ore_groups.values():
-            ore_group['Compressed'] = ['Compressed ' + string for string in ore_group['Uncompressed']]
-        min_rstd = 100000000000000000000
-        max_rstd = 0
-        for ore_type, ore_type_id in ore_type_ids.items():
-            if ore_type.split(' ')[0] == 'Compressed':
-                compressed_bool = True
-            else:
-                compressed_bool = False
-            ore_report = {}
-            ore_report['figures'] = {}
-            matching_order_indices = np.where(type_ids == ore_type_id)[0]
-            ore_orders = [catalog[i] for i in matching_order_indices]
-            current_prices = [order.price for order in ore_orders]
-            buy_sell = [order.is_buy_order for order in ore_orders]
-            ore_report['n_orders'] = len(ore_orders)
-            buy_order_indices = np.where(np.array(buy_sell)==True)[0]
-            ore_buy_prices = [ore_orders[i].price for i in buy_order_indices]
-            sell_order_indices = np.where(np.array(buy_sell)==False)[0]
-            ore_sell_prices = [ore_orders[i].price for i in sell_order_indices]
-            ore_report['percent_buy'] = len(np.where(np.array(buy_sell)==True)[0])/len(ore_orders)*100
-            ore_report['n_buy_orders'] = len(buy_order_indices)
-            ore_report['n_sell_orders']  = len(sell_order_indices)
-            ore_report['mean_buy_price'] = np.mean(ore_buy_prices)
-            ore_report['std_buy_price'] = np.std(ore_buy_prices)
-            ore_report['max_buy_price'] = np.max(ore_buy_prices)
-            ore_report['min_buy_price'] = np.min(ore_buy_prices)
-            ore_report['total_buy_volume'] = 0
-            for i in buy_order_indices:
-                order = ore_orders[i]
-                volume = int(order.volume_remain)
-                ore_report['total_buy_volume'] += volume
-            ore_report['gross_estimated_buy_value'] = ore_report['mean_buy_price'] * ore_report['total_buy_volume']
-            ore_report['mean_sell_price'] = np.mean(ore_sell_prices)
-            ore_report['std_sell_price'] = np.std(ore_sell_prices)
-            ore_report['max_sell_price'] = np.max(ore_sell_prices)
-            ore_report['min_sell_price'] = np.min(ore_sell_prices)
-            ore_report['total_sell_volume'] = 0
-            for order in ore_orders:
-                order = ore_orders[i]
-                volume = int(order.volume_remain)
-                ore_report['total_sell_volume'] += volume
-            ore_report['gross_estimated_sell_value'] = ore_report['mean_sell_price'] * ore_report['total_sell_volume']
-            ore_report['global_current_prices'] = np.mean(current_prices)
-            ore_report['global_price_std'] = np.std(current_prices)
-            ore_report['global_price_rstd'] = (np.std(current_prices) / np.mean(current_prices)) * 100
-            if ore_report['global_price_rstd'] > max_rstd:
-                max_rstd = ore_report['global_price_rstd']
-                most_unstable_ore = (ore_type, max_rstd)
-            if ore_report['global_price_rstd'] < min_rstd:
-                min_rstd = ore_report['global_price_rstd']
-                most_stable_ore = (ore_type, min_rstd)
-            duration_counts = np.zeros_like(duration_bins)
-            for order in ore_orders:
-                d = order.duration
-                duration_counts[duration_bins.index(d)] += 1
-            ore_report['figures']['duration_histogram'] = {str(duration_bins[i]):duration_counts[i] for i in range(len(duration_bins))}
-            report['Ores'][ore_type] = ore_report
-        #Categorical and statistical analyses
-        report['Ores']['grouped_volume'] = {}
-        report['Ores']['grouped_n_orders'] = {}
-        for key, ore_group in ore_groups.items():
-            group_n_orders = 0
-            group_volume = 0
-            for ore_type in ore_group['Uncompressed']:
-                tid = ore_type_ids[ore_type]
-                matching_order_indices = np.where(type_ids == tid)[0]
-                matching_orders = [catalog[i] for i in matching_order_indices]
-                group_n_orders += len(matching_orders)
-                for order in matching_orders:
-                    group_volume += int(order.volume_remain)
-            for ore_type in ore_group['Compressed']:
-                tid = ore_type_ids[ore_type]
-                matching_order_indices = np.where(type_ids == tid)[0]
-                matching_orders = [catalog[i] for i in matching_order_indices]
-                group_n_orders += len(matching_orders)
-                for order in matching_orders:
-                    group_volume += int(order.volume_remain)
-            report['Ores']['grouped_volume'][key] = group_volume
-            report['Ores']['grouped_n_orders'][key] = group_n_orders
-        report['Ores']['most/least stable'] = (most_stable_ore, most_unstable_ore)
-        #Generate figures
-        try:
-            os.mkdir(os.path.join(figure_dir,'ores'))
-        except:
-            pass
-        report['Ores']['figures'] = {}
-        temp = report['Ores']['grouped_n_orders'].items()
-        x = [item[0] for item in temp]
-        y = [item[1] for item in temp]
-        report['Ores']['figures']['grouped_order_count'] = plt.figure()
-        plt.pie(y)
-        plt.legend(x)
-        plt.title('Ore Grouped Order Count')
-        figname = os.path.join(os.path.join(figure_dir,'ores'),'Grouped Order Count.png')
-        plt.savefig(figname)
-        plt.close()
-        temp = report['Ores']['grouped_volume'].items()
-        x = [item[0] for item in temp]
-        y = [item[1] for item in temp]
-        report['Ores']['figures']['grouped_unit_volume'] = plt.figure()
-        plt.pie(y)
-        plt.legend(x)
-        plt.title('Ore Grouped Unit Volume')
-        figname = os.path.join(os.path.join(figure_dir,'ores'),'Grouped Unit Volume.png')
-        plt.savefig(figname)
-        plt.close()
-        ##Ice subreport
-        ice_report = {}
-        min_rstd = 100000000000000000000
-        max_rstd = 0
-        for ice_type, ice_type_id in ice_type_ids.items():
-            ir = ice_report[ice_type] = {}
-            ir['figures'] = {}
-            matching_order_indices = np.where(type_ids == ice_type_id)[0]
-            ice_orders = [catalog[i] for i in matching_order_indices]
-            current_prices = [order.price for order in ice_orders]
-            buy_sell = [order.is_buy_order for order in ice_orders]
-            ir['n_orders'] = len(ice_orders)
-            buy_order_indices = np.where(np.array(buy_sell)==True)[0]
-            ice_buy_prices = [ice_orders[i].price for i in buy_order_indices]
-            sell_order_indices = np.where(np.array(buy_sell)==False)[0]
-            ice_sell_prices = [ice_orders[i].price for i in sell_order_indices]
-            ir['n_buy_orders'] = len(buy_order_indices)
-            ir['n_sell_orders']  = len(sell_order_indices)
-            ir['mean_buy_price'] = np.mean(ice_buy_prices)
-            ir['std_buy_price'] = np.std(ice_buy_prices)
-            ir['max_buy_price'] = np.max(ice_buy_prices)
-            ir['min_buy_price'] = np.min(ice_buy_prices)
-            ir['mean_sell_price'] = np.mean(ice_sell_prices)
-            ir['std_sell_price'] = np.std(ice_sell_prices)
-            ir['max_sell_price'] = np.max(ice_sell_prices)
-            ir['min_sell_price'] = np.min(ice_sell_prices)
-            ir['percent_buy'] = len(np.where(np.array(buy_sell)==True)[0])/len(ice_orders)*100
-            ir['global_current_prices'] = np.mean(current_prices)
-            ir['global_price_std'] = np.std(current_prices)
-            ir['global_price_rstd'] = (np.std(current_prices) / np.mean(current_prices)) * 100
-            ir['total_volume'] = np.sum([np.sum(order.volume_remain) for order in ice_orders])
-            ir['total_buy_volume'] = np.sum([ice_orders[i].volume_remain for i in buy_order_indices])
-            ir['total_sell_volume'] = np.sum([ice_orders[i].volume_remain for i in sell_order_indices])
-            if ir['global_price_rstd'] > max_rstd:
-                max_rstd = ir['global_price_rstd']
-                most_unstable_ice = (ice_type, max_rstd)
-            if ir['global_price_rstd'] < min_rstd:
-                min_rstd = ir['global_price_rstd']
-                most_stable_ice = (ice_type, min_rstd)
-            duration_counts = np.zeros_like(duration_bins)
-            for order in ice_orders:
-                d = order.duration
-                duration_counts[duration_bins.index(d)] += 1
-            ir['figures']['duration_histogram'] = {str(duration_bins[i]):duration_counts[i] for i in range(len(duration_bins))}
-        report['Ices'] = ice_report
-        #Write Ore Report
-        wb = op.Workbook()
-        ore_group_names = [key for key in ore_groups.keys()]
-        summary_sheet = wb.active
-        ore_data = report['Ores']
-        try:
-            os.mkdir(os.path.join(figure_dir, 'ores'))
-        except:
-            pass
-        uncompressed_metrics = [key for key in ore_data['Arkonor'].keys()]
-        compressed_metrics = [key for key in ore_data['Compressed Arkonor'].keys()]
-        for key, ore_group in ore_groups.items():
-            ws = wb.create_sheet(key)
-            lines = [['Ore'],
-                     ['Uncompressed','']+uncompressed_metrics[1:]]
-            for ore_type in ore_group['Uncompressed']:
-                newline = [ore_type,'']
-                for metric in uncompressed_metrics[1:]:
-                    newline.append(ore_data[ore_type][metric])
-                lines.append(newline)
-            if key == 'Mercoxit': lines.append([''])
-            lines.append(['Compressed','']+compressed_metrics[1:])
-            for ore_type in ore_group['Compressed']:
-                newline = [ore_type,'']
-                for metric in compressed_metrics[1:]:
-                    newline.append(ore_data[ore_type][metric])
-                lines.append(newline)
-            if key == 'Mercoxit': lines.append([''])
-            self.list2sheet(lines, ws)
-        # Summary sheet
-        summary_sheet.title = 'Summary'
-        summary_header = ['','Ore Group', 'Max Sec', 'Group Average Unit Sell Price',
-                          'Group RStDev Unit Sell Price','Group Average Unit Buy Price',
-                          'Group RStDev Unit Buy Price', 'n buy orders', 'n sell orders',
-                          'Sell Volume','Buy Volume','Sell Gross','Buy Gross']
-        lines = [['Uncompressed'],
-                 summary_header,
-                 ['']]
-        categorical_column = ['High Sec','Veldspar','Scordite','Pyroxeres','Plagioclase',
-                              'Omber','Kernite','','Low','Jaspet','Hemorphite','Hedbergite',
-                              '','Null','Gneiss','Ochre','Spodumain','Crokite','Bistot',
-                              'Arkonor','Mercoxit']
-        min_row = 2
-        min_column = 3
-        max_column = 2 + len(uncompressed_metrics)
-        max_row = 6
-        for ore_group in categorical_column:
-            new_row = ['',ore_group]
-            if ore_group in ore_group_names:
-                new_row.append(max_sec[ore_group])
-                group_sheet = wb[ore_group]
-                ore_metrics = {}
-                for col in range(min_column, max_column):
-                    col_data = [group_sheet.cell(row=row_n, column=col).value for row_n in range(min_row, max_row+1)]
-                    header = col_data[0]
-                    col_entries = col_data[1:]
-                    if ore_group == 'Mercoxit': ore_metrics[header] = col_entries[:-1]
-                    else: ore_metrics[header] = col_entries
-                group_data = {}
-                # Read in base data
-                group_data['global_current_prices'] = np.mean(ore_metrics['global_current_prices'])
-                group_data['global_price_rstd'] = np.mean(ore_metrics['global_price_rstd'])
-                group_data['global_price_std'] = np.mean(ore_metrics['global_price_std'])
-                group_data['mean_buy_price'] = np.mean(ore_metrics['mean_buy_price'])
-                group_data['std_buy_price'] = np.mean(ore_metrics['std_buy_price'])
-                group_data['mean_sell_price'] = np.mean(ore_metrics['mean_sell_price'])
-                group_data['std_sell_price'] = np.mean(ore_metrics['std_sell_price'])
-                group_data['n_buy_orders'] = np.sum(ore_metrics['n_buy_orders'])
-                group_data['n_orders'] = np.sum(ore_metrics['n_orders'])
-                group_data['n_sell_orders'] = np.sum(ore_metrics['n_sell_orders'])
-                group_data['total_buy_volume'] = np.sum(ore_metrics['total_buy_volume'])
-                group_data['total_sell_volume'] = np.sum(ore_metrics['total_sell_volume'])
-                # Calculate higher order data
-                group_data['total_demand_value'] = group_data['total_buy_volume'] * group_data['mean_buy_price']
-                group_data['total_supply_value'] = group_data['total_sell_volume'] * group_data['mean_sell_price']
-                group_data['rstd_buy_price'] = group_data['std_buy_price'] / group_data['mean_buy_price']
-                group_data['rstd_sell_price'] = group_data['std_sell_price'] / group_data['mean_sell_price']
-                # Organize for write to xlsx
-                new_row.append(group_data['mean_sell_price'])
-                new_row.append(group_data['rstd_sell_price'])
-                new_row.append(group_data['mean_buy_price'])
-                new_row.append(group_data['rstd_buy_price'])
-                new_row.append(group_data['n_buy_orders'])
-                new_row.append(group_data['n_sell_orders'])
-                new_row.append(group_data['total_sell_volume'])
-                new_row.append(group_data['total_buy_volume'])
-                new_row.append(group_data['total_supply_value'])
-                new_row.append(group_data['total_demand_value'])
-            lines.append(new_row)
-            
-        lines.append(['Compressed'])
-        lines.append(summary_header)
-        lines.append([''])
-        min_row = 7
-        max_row = 11
-        min_column = 3
-        max_column = 2 + len(compressed_metrics)
-        for ore_group in categorical_column:
-            new_row = ['',ore_group]
-            if ore_group in ore_group_names:
-                new_row.append(max_sec[ore_group])
-                group_sheet = wb[ore_group]
-                ore_metrics = {}
-                for col in range(min_column, max_column):
-                    col_data = [group_sheet.cell(row=row_n, column=col).value for row_n in range(min_row, max_row+1)]
-                    header = col_data[0]
-                    col_entries = col_data[1:]
-#                    ore_metrics[header] = col_entries
-                    if ore_group == 'Mercoxit': ore_metrics[header] = col_entries[:-1]
-                    else: ore_metrics[header] = col_entries
-                group_data = {}
-                # Read in base data
-                group_data['global_current_prices'] = np.mean(ore_metrics['global_current_prices'])
-                group_data['global_price_rstd'] = np.mean(ore_metrics['global_price_rstd'])
-                group_data['global_price_std'] = np.mean(ore_metrics['global_price_std'])
-                group_data['mean_buy_price'] = np.mean(ore_metrics['mean_buy_price'])
-                group_data['std_buy_price'] = np.mean(ore_metrics['std_buy_price'])
-                group_data['mean_sell_price'] = np.mean(ore_metrics['mean_sell_price'])
-                group_data['std_sell_price'] = np.mean(ore_metrics['std_sell_price'])
-                group_data['n_buy_orders'] = np.sum(ore_metrics['n_buy_orders'])
-                group_data['n_orders'] = np.sum(ore_metrics['n_orders'])
-                group_data['n_sell_orders'] = np.sum(ore_metrics['n_sell_orders'])
-                group_data['total_buy_volume'] = np.sum(ore_metrics['total_buy_volume'])
-                group_data['total_sell_volume'] = np.sum(ore_metrics['total_sell_volume'])
-                # Calculate higher order data
-                group_data['total_demand_value'] = group_data['total_buy_volume'] * group_data['mean_buy_price']
-                group_data['total_supply_value'] = group_data['total_sell_volume'] * group_data['mean_sell_price']
-                group_data['rstd_buy_price'] = group_data['std_buy_price'] / group_data['mean_buy_price']
-                group_data['rstd_sell_price'] = group_data['std_sell_price'] / group_data['mean_sell_price']
-                # Organize for write to xlsx
-                new_row.append(group_data['mean_sell_price'])
-                new_row.append(group_data['rstd_sell_price'])
-                new_row.append(group_data['mean_buy_price'])
-                new_row.append(group_data['rstd_buy_price'])
-                new_row.append(group_data['n_buy_orders'])
-                new_row.append(group_data['n_sell_orders'])
-                new_row.append(group_data['total_sell_volume'])
-                new_row.append(group_data['total_buy_volume'])
-                new_row.append(group_data['total_supply_value'])
-                new_row.append(group_data['total_demand_value'])
-            lines.append(new_row)
-        for idx, line in enumerate(lines):
-            idx += 1
-            for jdx, entry in enumerate(line):
-                jdx += 1
-                summary_sheet.cell(idx, jdx, entry)
-        ore_report_fname = 'Sleeper_oreReport_daily_'+str(timestamp)+'.xlsx'
-        ore_report_fname = os.path.join(report_dir, ore_report_fname)
-        wb.save(ore_report_fname)
-        #Write Ice Report
-        wb = op.Workbook()
-        ws = wb.active
-        ice_data = report['Ices']
-        ice_types = list(ice_data.keys())
-        compressed_types = []
-        uncompressed_types = []
-        for ice in ice_types:
-            split_name = ice.split(' ')
-            if 'Compressed' in split_name:
-                compressed_types.append(ice)
-            else:
-                uncompressed_types.append(ice)
-        try:
-            os.mkdir(os.path.join(figure_dir, 'ices'))
-        except:
-            pass
-        uncompressed_metrics = [key for key in ice_data['Blue Ice'].keys()]
-        compressed_metrics = [key for key in ice_data['Compressed Blue Ice'].keys()]
-        ws.cell(1,1,'Ore')
-        ws.cell(2,1,'Uncompressed')
-        for column, value in enumerate(uncompressed_metrics):
-            if value == 'figures':
-                continue
-            column += 2
-            ws.cell(2, column, value)
-        for row, ore_name in enumerate(uncompressed_types):
-            ws.cell(row+3, 1, ore_name)
-            ore_report = ice_data[ore_name]
-            for column, (key, value) in enumerate(ore_report.items()):
-                if key == 'figures':
-                    continue
-                column += 2
-                ws.cell(row+3, column, value)
-        ws.cell(14,1,'Compressed')
-        for column, value in enumerate(uncompressed_metrics):
-            if value == 'figures':
-                continue
-            column += 2
-            ws.cell(14, column, value)
-        for row, ore_name in enumerate(compressed_types):
-            ws.cell(row+15, 1, ore_name)
-            ore_report = ice_data[ore_name]
-            for column, (key, value) in enumerate(ore_report.items()):
-                if key == 'figures':
-                    continue
-                column += 2
-                ws.cell(row+15, column, value)
-        ore_report_fname = 'Sleeper_iceReport_daily_'+str(today_timestamp)+'.xlsx'
-        ore_report_fname = os.path.join(report_dir, ore_report_fname)
-        wb.save(ore_report_fname)
+        return
+    
+    
