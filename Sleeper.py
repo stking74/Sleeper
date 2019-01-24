@@ -7,6 +7,7 @@ import numpy as np
 import pickle
 import json
 import os
+import zlib
 
 def crawldir(topdir=[], ext='sxm'):
     '''
@@ -80,9 +81,10 @@ class Sleeper():
         '''
         Converts raw returned data entry from SwaggerAPI to Order object
         '''
+        strptime_template = '%Y-%m-%dT%H:%M:%S+00:00'
         duration = rawentry['duration']
         is_buy_order = rawentry['is_buy_order']
-        issued = rawentry['issued']
+        issued = datetime.datetime.strptime(str(rawentry['issued']), strptime_template)
         location_id = rawentry['location_id']
         min_volume = rawentry['min_volume']
         order_id = rawentry['order_id']
@@ -182,17 +184,20 @@ class Sleeper():
     
     @staticmethod
     def _save_dumpfile_(payload, filename):
-        f = open(filename, 'wb')
-        f.write(payload)
-        f.close()
+        with open(filename, 'wb') as f:
+            p_string = json.dumps(payload)
+            p_bytes = zlib.compress(p_string.encode())
+            f.write(p_bytes)
         return
     
     @staticmethod
     def _load_dumpfile_(fname):
         with open(fname, 'rb') as f:
-            decomposed_catalog, dump_timestamp = json.load(f)
+            p_bytes = f.read()
+            p_string = zlib.decompress(p_bytes).decode()
+            decomposed_catalog, dump_timestamp = json.loads(p_string)
         raw_catalog = Sleeper.recompose(decomposed_catalog)
-        return raw_catalog
+        return raw_catalog, dump_timestamp
     
     @staticmethod
     def recompose(decomposed_catalog):
@@ -430,18 +435,19 @@ class Order(dict):
         intermediate step for saving order to file individually or as part of
         catalog dump.
         '''
-        
+    
+        strftime_template = '%Y-%m-%d %H:%M:%S.%f'
         decomposed_order = {
                 'duration' : self['duration'],
                 'is_buy_order' : self['is_buy_order'],
-                'issued' : str(self['issued']),
+                'issued' : datetime.datetime.strftime(self['issued'], strftime_template),
                 'location_id' : self['location_id'],
                 'min_volume' : self['min_volume'],
                 'order_id' : self['order_id'],
                 'price' : self['price'],
                 'range' : self['range'],
                 'system_id' : self['system_id'],
-                'timestamps' : [str(timestamp) for timestamp in self['timestamps']],
+                'timestamps' : [datetime.datetime.strftime(timestamp, strftime_template) for timestamp in self['timestamps']],
                 'type_id' : self['type_id'],
                 'volume_remain' : self['volume_remain'],
                 'volume_total' : self['volume_total']
