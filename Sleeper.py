@@ -29,6 +29,26 @@ def crawldir(topdir=[], ext='sxm'):
                         fn[root] = [addname]    
     return fn
 
+def soft_append(container, addendum):
+    '''
+    Appends addendum item to container only if addendum is not already member
+    of container.
+    
+    Input:
+    --------
+    container : list or set
+        container object to be appended
+    addendum : any
+        value to be soft-appended to container
+    '''
+    if addendum not in container:
+        if type(container) is list:
+            container.append(addendum)
+        elif type(container) is set:
+            container.add(addendum)
+        return container
+    return container
+
 class Sleeper():
     
     def __init__(self):
@@ -46,13 +66,96 @@ class Sleeper():
                                     raw_body_only=False)
         self.root_dir = os.getcwd()
         self.store_dir = os.path.join(self.root_dir, 'data_dumps')
-        self.settings_fname = 'sleeper_settings.sl'
+        self.resource_dir = os.path.join(self.root_dir, 'bin')
+        try:
+            resource_files = os.listdir(self.resource_dir)
+        except:
+            os.mkdir(self.resource_dir)
+            resource_files = os.listdir(self.resource_dir)
+        if len(resource_files) == 0:
+            print('Performing first-time metadata update. This will take a few minutes.')
+            self._update_market_metadata_()
+        self._import_market_metadata_()
+        self.settings_fname = os.path.join(self.resource_dir, 'sleeper_settings.sl')
+        self._update_region_list()
         return
     
     @staticmethod
     def _save_catalog_(filename, catalog):
         with open(filename, 'w') as f:
             json.dump(catalog._decompose_(), f)
+        return
+    
+    def _update_market_metadata_(self):
+        topdown={}
+        bottomup={}
+        ignore_categories = [0,1,3,10,11,14,24,26,29,350001,53,54,59,49]
+        
+        operation = self.app.op['get_universe_categories']()
+        response = self.client.request(operation)
+        cat_ids = [d for d in response.data]
+        for cid in ignore_categories:
+            cat_ids.remove(cid)
+        cat_names = []
+        grp_ids = []
+        grp_names = []
+        type_ids = []
+        type_names = []
+        for cid in cat_ids:
+            operation = self.app.op['get_universe_categories_category_id'](
+                    category_id=cid)
+            while True:
+                response = self.client.request(operation)
+                if response.status == 200:
+                    break
+            cat_names.append(response.data['name'])
+            categorical_groups = response.data['groups']
+            categorized = {}
+            for gid in categorical_groups:
+                grp_ids.append(gid)
+                operation = self.app.op['get_universe_groups_group_id'](
+                    group_id=gid)
+                while True:
+                    response = self.client.request(operation)
+                    if response.status == 200:
+                        break
+                grp_names.append(response.data['name'])
+                grouped_types = response.data['types']
+                grouped = []
+                for tid in grouped_types:
+                    type_ids.append(tid)
+                    operation = self.app.op['get_universe_types_type_id'](
+                            type_id=tid)
+                    while True:
+                        response = self.client.request(operation)
+                        if response.status == 200:
+                            break
+                    type_names.append(response.data['name'])
+                    grouped.append(tid)
+                    bottomup[tid]={'category_id':cid, 'group_id':gid}
+                categorized[gid] = grouped
+            topdown[cid] = categorized
+            print('Pulled category: %s'%cat_names[-1])
+        
+        category_ids_fname = os.path.join(self.resource_dir, 'category_ids.json')
+        group_ids_fname = os.path.join(self.resource_dir, 'group_ids.json')
+        type_ids_fname = os.path.join(self.resource_dir, 'type_ids.json')
+        topdown_fname = os.path.join(self.resource_dir, 'heirarchy_topdown.json')
+        bottomup_fname = os.path.join(self.resource_dir, 'heirarchy_bottomup.json')
+        
+        print('Writing metadata...')
+        
+        with open(category_ids_fname, 'w') as f:
+            json.dump((cat_ids, cat_names), f)
+        with open(group_ids_fname, 'w') as f:
+            json.dump((grp_ids, grp_names), f)
+        with open(type_ids_fname, 'w') as f:
+            json.dump((type_ids, type_names), f)
+        with open(topdown_fname, 'w') as f:
+            json.dump(topdown, f)
+        with open(bottomup_fname, 'w') as f:
+            json.dump(bottomup, f)
+            
         return
     
     def _update_region_list(self):
@@ -75,6 +178,43 @@ class Sleeper():
                 self.region_list[name]['constellations'] = list(self.region_list[name]['constellations'])
             i += 1
         return self.region_list
+    
+    def _import_market_metadata_(self):
+        
+        category_ids_fname = os.path.join(self.resource_dir, 'category_ids.json')
+        group_ids_fname = os.path.join(self.resource_dir, 'group_ids.json')
+        type_ids_fname = os.path.join(self.resource_dir, 'type_ids.json')
+        topdown_fname = os.path.join(self.resource_dir, 'heirarchy_topdown.json')
+        bottomup_fname = os.path.join(self.resource_dir, 'heirarchy_bottomup.json')
+        
+        with open(category_ids_fname, 'r') as f:
+            cat_ids, cat_names = tuple(json.load(f))
+        with open(group_ids_fname, 'r') as f:
+            grp_ids, grp_names = tuple(json.load(f))
+        with open(type_ids_fname, 'r') as f:
+            type_ids, type_names = tuple(json.load(f))
+        with open(topdown_fname, 'r') as f:
+            self.topdown = json.load(f)
+        with open(bottomup_fname, 'r') as f:
+            self.bottomup = json.load(f)
+            
+        self.categories = {}
+        self.categories_reverse = {}
+        for idx, cid in enumerate(cat_ids):
+            self.categories[cid] = cat_names[idx]
+            self.categories_reverse[cat_names[idx]] = cid
+        self.groups = {}
+        self.groups_reverse = {}
+        for idx, gid in enumerate(grp_ids):
+            self.groups[gid] = grp_names[idx]
+            self.groups_reverse[grp_names[idx]] = gid
+        self.types = {}
+        self.types_reverse = {}
+        for idx, tid in enumerate(type_ids):
+            self.types[tid] = type_names[idx]
+            self.types_reverse[type_names[idx]] = tid
+        
+        return
     
     @staticmethod
     def _rawentry2order_(rawentry, timestamp):
@@ -120,6 +260,19 @@ class Sleeper():
                       order_id, price, _range, system_id, timestamps, type_id,
                       volume_remain, volume_total)
         return order
+    
+    def list_categories(self):
+        print([i for i in zip(self.categories.keys(), self.categories.values())])
+        return
+    
+    def list_groups(self):
+        print([i for i in zip(self.groups.keys(), self.groups.values())])
+        return
+    
+    def list_types(self):
+        print([i for i in zip(self.types.keys(), self.types.values())])
+        return
+        
     
     def market_dump(self):
         '''
@@ -212,7 +365,7 @@ class Sleeper():
         # If no high is given, set high equal to low. Equivalence is handled later
         strptime_template = '%Y-%m-%d %H:%M:%S'
         
-        if high == '':
+        if high == '' or high is None:
             high = low
         
         if type(low)==str:
@@ -226,8 +379,8 @@ class Sleeper():
             item = os.path.join(self.store_dir, item)
             if os.path.isfile(item):
                 if item.split('.')[1] == 'sld':
-                    files.append(os.path.basename(item))
-        file_timestamps = [datetime.datetime.strptime(fname[12:31],'%Y-%m-%d %H-%M-%S') for fname in files]
+                    files.append(item)
+        file_timestamps = [datetime.datetime.strptime(os.path.split(fname)[1][12:31],'%Y-%m-%d %H-%M-%S') for fname in files]
         
         range_ts = []
         
@@ -244,14 +397,13 @@ class Sleeper():
         
         ti = time.time()
         
-        master_catalog = {key:Catalog() for key in self.region_list.keys()}
+        master_catalog = Catalog()
+        loaded_timestamps = []
+        
         for fname in range_files:
-            print('loading file:', fname)
-            fname = os.path.join(self.store_dir, fname)
-            raw_dump_data, rawdump_ts = Sleeper._load_dumpfile_(fname)
-            for key, old_catalog in master_catalog.items():
-                new_catalog = raw_dump_data[key]
-                Sleeper._merge_catalogs_(old_catalog, new_catalog)
+            raw_cat, ts = self._load_dumpfile_(fname)
+            master_catalog = Catalog._merge_catalogs_(master_catalog, raw_cat)
+            loaded_timestamps.append(ts)
                 
         dt = time.time() - ti
         print('loaded %i files, %i orders in %f seconds'%(len(range_files), np.sum([len(catalog) for catalog in master_catalog.values()]), dt))
@@ -325,6 +477,24 @@ class Sleeper():
             if order.order_id not in order_ids:
                 stripped_catalog.append(order)
         return stripped_catalog
+    
+    def tid2name(self, tid):
+        with open(os.path.join(self.resource_dir, 'type_ids.json'),'r') as f:
+            ids, names = json.load(f)
+        idx = ids.index(tid)
+        return names[idx]
+    
+    def gid2name(self, gid):
+        with open(os.path.join(self.resource_dir, 'group_ids.json'),'r') as f:
+            ids, names = json.load(f)
+        idx = ids.index(gid)
+        return names[idx]
+    
+    def cid2name(self, cid):
+        with open(os.path.join(self.resource_dir, 'category_ids.json'),'r') as f:
+            ids, names = json.load(f)
+        idx = ids.index(cid)
+        return names[idx]
         
 
 class Order(dict):
@@ -546,9 +716,8 @@ class Reporter:
     of compilation of aggregate data into a meaningful format. 
     '''
     
-    def __init__(self, data_dir, resource_dir, report_dir):
+    def __init__(self, data_dir, report_dir):
         self.data_dir = data_dir
-        self.resource_dir = resource_dir
         self.report_dir = report_dir
         return
     
