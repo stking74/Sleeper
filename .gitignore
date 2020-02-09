@@ -2,3 +2,4 @@ data_dumps/
 /reports/
 /bin/
 *.txt
+/__pycache__/
