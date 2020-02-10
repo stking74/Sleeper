@@ -72,9 +72,18 @@ class Sleeper():
         except:
             os.mkdir(self.resource_dir)
             resource_files = os.listdir(self.resource_dir)
-        if len(resource_files) == 0:
-            print('Performing first-time metadata update. This will take a few minutes.')
-            self._update_market_metadata_()
+        resource_filenames = [
+            'category_ids.json',
+            'group_ids.json',
+            'heirarchy_topdown.json',
+            'heirarchy_bottomup.json',
+            'type_ids.json'
+        ]
+        for fname in resource_filenames:
+            if fname not in resource_files:
+                print('Performing first-time metadata update. This will take a few minutes.')
+                self._update_market_metadata_()
+                break
         self._import_market_metadata_()
         self.settings_fname = os.path.join(self.resource_dir, 'sleeper_settings.sl')
         self._update_region_list()
@@ -274,7 +283,7 @@ class Sleeper():
         return
 
 
-    def market_dump(self):
+    def market_dump(self, save=False):
         '''
         Scrapes full current market data, saves to .sld archive file. File is
         formatted as a tuple containing a decomposed catalog and a dump timestamp
@@ -320,16 +329,17 @@ class Sleeper():
             region_dump = _request_region_market_orders(region_id, order_type='all')
             master_catalog += region_dump
 
-        decomposed_catalog = master_catalog._decompose_()
-        refresh_time = datetime.datetime.now()
-        pik_filename = 'market_dump-'+str(refresh_time)[:-7]+'.sld'
-        pik_filename = [c for c in pik_filename]
-        pik_filename[25] = '-'
-        pik_filename[28] = '-'
-        pik_filename = ''.join(pik_filename)
-        pik_filename = os.path.join(self.store_dir, pik_filename)
-        dump_contents = (decomposed_catalog, str(refresh_time))
-        Sleeper._save_dumpfile_(dump_contents, pik_filename)
+        if save:
+            decomposed_catalog = master_catalog._decompose_()
+            refresh_time = datetime.datetime.now()
+            pik_filename = 'market_dump-'+str(refresh_time)[:-7]+'.sld'
+            pik_filename = [c for c in pik_filename]
+            pik_filename[25] = '-'
+            pik_filename[28] = '-'
+            pik_filename = ''.join(pik_filename)
+            pik_filename = os.path.join(self.store_dir, pik_filename)
+            dump_contents = (decomposed_catalog, str(refresh_time))
+            Sleeper._save_dumpfile_(dump_contents, pik_filename)
 
         print('DONE')
 
