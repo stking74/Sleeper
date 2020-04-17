@@ -282,7 +282,6 @@ class Sleeper():
         print([i for i in zip(self.types.keys(), self.types.values())])
         return
 
-
     def market_dump(self, save=False):
         '''
         Scrapes full current market data, saves to .sld archive file. File is
@@ -359,126 +358,8 @@ class Sleeper():
             p_bytes = f.read()
             p_string = zlib.decompress(p_bytes).decode()
             decomposed_catalog, dump_timestamp = json.loads(p_string)
-        raw_catalog = Sleeper.recompose(decomposed_catalog)
+        raw_catalog = Catalog._recompose_(decomposed_catalog)
         return raw_catalog, dump_timestamp
-
-    @staticmethod
-    def recompose(decomposed_catalog):
-        rebuilt = Catalog()
-        for order in decomposed_catalog:
-            new_order = Sleeper.dict2order(order)
-            rebuilt[new_order.id] = new_order
-        return rebuilt
-
-    def _agregate_range_(self, low, high=None):
-
-        # If no high is given, set high equal to low. Equivalence is handled later
-        strptime_template = '%Y-%m-%d %H:%M:%S'
-
-        if high == '' or high is None:
-            high = low
-
-        if type(low)==str:
-            low = datetime.datetime.strptime(low, strptime_template)
-        if type(high)==str:
-            high = datetime.datetime.strptime(high, strptime_template)
-        dir_dump = os.listdir(self.store_dir)
-
-        files = []
-        for item in dir_dump:
-            item = os.path.join(self.store_dir, item)
-            if os.path.isfile(item):
-                if item.split('.')[1] == 'sld':
-                    files.append(item)
-        file_timestamps = [datetime.datetime.strptime(os.path.split(fname)[1][12:31],'%Y-%m-%d %H-%M-%S') for fname in files]
-
-        range_ts = []
-
-        #If high == low, load only file with timestamp == low
-        if high == low:
-            range_ts.append(file_timestamps.index(low))
-        # Else load all files with timestamps between from low to high, inclusive
-        else:
-            for idx, ts in enumerate(file_timestamps):
-                if ts >= low and ts <= high:
-                    range_ts.append(idx)
-
-        range_files = [files[i] for i in range_ts]
-
-        ti = time.time()
-
-        master_catalog = Catalog()
-        loaded_timestamps = []
-
-        for fname in range_files:
-            raw_cat, ts = self._load_dumpfile_(fname)
-            master_catalog = Catalog._merge_catalogs_(master_catalog, raw_cat)
-            loaded_timestamps.append(ts)
-
-        dt = time.time() - ti
-        print('loaded %i files, %i orders in %f seconds'%(len(range_files), np.sum([len(catalog) for catalog in master_catalog.values()]), dt))
-
-        return master_catalog
-
-    def filter_catalog(self, catalog, criteria, value):
-        '''
-        Input:
-        --------
-            catalog : list of Sleeper.Order objects
-
-            criteria : str
-
-            value : str
-        '''
-        matching_orders = []
-        criteria = criteria.upper()
-        if criteria=='DURATION':
-            critcheck = [order['duration'] for order in catalog]
-            value = int(value)
-        elif criteria=='IS_BUY_ORDER':
-            critcheck = [order.is_buy_order for order in catalog]
-            value = bool(value)
-        elif criteria=='ISSUED':
-            critcheck = [order.issued for order in catalog]
-            value = datetime.datetime.strptime(value, '%Y-%m-%d')
-        elif criteria=='LOCATION_ID':
-            critcheck = [order.location_id for order in catalog]
-            value = int(value)
-        elif criteria=='MIN_VOLUME':
-            critcheck = [order.min_volume for order in catalog]
-            value = int(value)
-        elif criteria=='ORDER_ID':
-            critcheck = [order.order_id for order in catalog]
-            value = int(value)
-        elif criteria=='PRICE':
-            critcheck = [order.price[-1] for order in catalog]
-            value = float(value)
-        elif criteria=='RANGE':
-            critcheck = [order._range for order in catalog]
-        elif criteria=='SYSTEM_ID':
-            critcheck = [order.system_id for order in catalog]
-            value = int(value)
-        elif criteria=='TIMESTAMPS':
-            critcheck = [order.timestamps[-1] for order in catalog]
-            value = datetime.datetime.strptime(value, '%Y-%m-%d')
-        elif criteria=='TYPE_ID':
-            critcheck = [order.type_id for order in catalog]
-            value = int(value)
-        elif criteria=='VOLUME_REMAIN':
-            critcheck = [order.volume_remain for order in catalog]
-            value = int(value)
-        elif criteria=='VOLUME_TOTAL':
-            critcheck = [order.volume_total for order in catalog]
-            value = int(value)
-        else:
-            raise KeyError('Criteria not recognized')
-
-        match_indices = []
-        for idx, val in enumerate(critcheck):
-            if val == value:
-                matching_orders.append(catalog[idx])
-
-        return filtered_catalog
 
     def strip_duplicates(catalog):
         stripped_catalog = []
@@ -505,7 +386,6 @@ class Sleeper():
             ids, names = json.load(f)
         idx = ids.index(cid)
         return names[idx]
-
 
 class Order(dict):
     '''
@@ -680,6 +560,125 @@ class Catalog(dict):
         compatible dictionary object using the order's _decompose_() method.
         '''
         return [order._decompose_() for order in self.orders()]
+
+    @staticmethod
+    def _recompose_(decomposed_catalog):
+        rebuilt = Catalog()
+        for order in decomposed_catalog:
+            new_order = Sleeper.dict2order(order)
+            rebuilt[new_order.id] = new_order
+        rebuilt.strip_duplicates()
+        return rebuilt
+
+    def filter(self, criteria, value):
+        '''
+        Input:
+        --------
+            catalog : list of Sleeper.Order objects
+
+            criteria : str
+
+            value : str
+        '''
+        matching_orders = []
+        criteria = criteria.upper()
+        if criteria=='DURATION':
+            critcheck = [order['duration'] for order in self]
+            value = int(value)
+        elif criteria=='IS_BUY_ORDER':
+            critcheck = [order.is_buy_order for order in self]
+            value = bool(value)
+        elif criteria=='ISSUED':
+            critcheck = [order.issued for order in self]
+            value = datetime.datetime.strptime(value, '%Y-%m-%d')
+        elif criteria=='LOCATION_ID':
+            critcheck = [order.location_id for order in self]
+            value = int(value)
+        elif criteria=='MIN_VOLUME':
+            critcheck = [order.min_volume for order in self]
+            value = int(value)
+        elif criteria=='ORDER_ID':
+            critcheck = [order.order_id for order in self]
+            value = int(value)
+        elif criteria=='PRICE':
+            critcheck = [order.price[-1] for order in self]
+            value = float(value)
+        elif criteria=='RANGE':
+            critcheck = [order._range for order in self]
+        elif criteria=='SYSTEM_ID':
+            critcheck = [order.system_id for order in self]
+            value = int(value)
+        elif criteria=='TIMESTAMPS':
+            critcheck = [order.timestamps[-1] for order in self]
+            value = datetime.datetime.strptime(value, '%Y-%m-%d')
+        elif criteria=='TYPE_ID':
+            critcheck = [order.type_id for order in self]
+            value = int(value)
+        elif criteria=='VOLUME_REMAIN':
+            critcheck = [order.volume_remain for order in self]
+            value = int(value)
+        elif criteria=='VOLUME_TOTAL':
+            critcheck = [order.volume_total for order in self]
+            value = int(value)
+        else:
+            raise KeyError('Criteria not recognized')
+
+        match_indices = []
+        for idx, val in enumerate(critcheck):
+            if val == value:
+                matching_orders.append(self[idx])
+
+        return filtered_catalog
+
+    # def _agregate_range_(self, low, high=None):
+    #
+    #     # If no high is given, set high equal to low. Equivalence is handled later
+    #     strptime_template = '%Y-%m-%d %H:%M:%S'
+    #
+    #     if high == '' or high is None:
+    #         high = low
+    #
+    #     if type(low)==str:
+    #         low = datetime.datetime.strptime(low, strptime_template)
+    #     if type(high)==str:
+    #         high = datetime.datetime.strptime(high, strptime_template)
+    #     dir_dump = os.listdir(self.store_dir)
+    #
+    #     files = []
+    #     for item in dir_dump:
+    #         item = os.path.join(self.store_dir, item)
+    #         if os.path.isfile(item):
+    #             if item.split('.')[1] == 'sld':
+    #                 files.append(item)
+    #     file_timestamps = [datetime.datetime.strptime(os.path.split(fname)[1][12:31],'%Y-%m-%d %H-%M-%S') for fname in files]
+    #
+    #     range_ts = []
+    #
+    #     #If high == low, load only file with timestamp == low
+    #     if high == low:
+    #         range_ts.append(file_timestamps.index(low))
+    #     # Else load all files with timestamps between from low to high, inclusive
+    #     else:
+    #         for idx, ts in enumerate(file_timestamps):
+    #             if ts >= low and ts <= high:
+    #                 range_ts.append(idx)
+    #
+    #     range_files = [files[i] for i in range_ts]
+    #
+    #     ti = time.time()
+    #
+    #     master_catalog = Catalog()
+    #     loaded_timestamps = []
+    #
+    #     for fname in range_files:
+    #         raw_cat, ts = self._load_dumpfile_(fname)
+    #         master_catalog = Catalog._merge_catalogs_(master_catalog, raw_cat)
+    #         loaded_timestamps.append(ts)
+    #
+    #     dt = time.time() - ti
+    #     print('loaded %i files, %i orders in %f seconds'%(len(range_files), np.sum([len(catalog) for catalog in master_catalog.values()]), dt))
+    #
+    #     return master_catalog
 
     def strip_duplicates(self):
         '''

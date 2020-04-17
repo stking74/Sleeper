@@ -2,4 +2,4 @@
 
 # __init__.py file for Sleeper
 
-from .core import Sleeper
+from .core import *

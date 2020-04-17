@@ -1,5 +1,5 @@
 data_dumps/
-/reports/
-/bin/
+bin/
 *.txt
-/__pycache__/
+__pycache__/
+.git/
