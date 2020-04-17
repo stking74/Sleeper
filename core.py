@@ -249,6 +249,30 @@ class Sleeper():
                       volume_remain, volume_total)
         return order
 
+    def get_regional_history(self, region_id=10000002, type_id=34):
+
+        def _request_region_market_history(region_id=10000002, type_id=34):
+            while True:
+                op = self.app.op['get_markets_region_id_history'](
+                    region_id=region_id,
+                    type_id=type_id)
+                res = self.client.request(op)
+                if res.status == 200:
+                    break
+            return res
+
+        try:
+            for tid in type_id:
+                pass
+        except:
+            type_id = [type_id]
+
+        results = {}
+        for tid in type_id:
+            results[tid] = _request_region_market_history(region_id, tid)
+        return results
+
+
     @staticmethod
     def dict2order(dictionary):
         strptime_template = '%Y-%m-%d %H:%M:%S.%f'
