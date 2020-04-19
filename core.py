@@ -89,6 +89,35 @@ class Sleeper():
         self._update_region_list()
         return
 
+    def _request_region_market_orders(self, region_id=10000002, type_id=34, order_type='all'):
+
+        while True:
+            op = self.app.op['get_markets_region_id_orders'](
+                region_id = region_id,
+                page=1,
+                order_type=order_type)
+            res = self.client.head(op)
+            if res.status == 200:
+                n_pages = res.header['X-Pages'][0]
+                operations = []
+                for page in range(1, n_pages+1):
+                    operations.append(
+                            self.app.op['get_markets_region_id_orders'](
+                                    region_id=region_id,
+                                    page=page,
+                                    order_type=order_type)
+                            )
+                while True:
+                    response = self.client.multi_request(operations)
+                    pull_time = datetime.datetime.now()
+                    r_codes = [packet[1].status for packet in response]
+                    success = [code == 200 for code in r_codes]
+                    if all(success):
+                        break
+                orders = Catalog._rawdump2catalog_(response, pull_time)
+                break
+        return orders
+    
     @staticmethod
     def _save_catalog_(filename, catalog):
         with open(filename, 'w') as f:
@@ -271,8 +300,28 @@ class Sleeper():
         for tid in type_id:
             results[tid] = _request_region_market_history(region_id, tid)
         return results
-
-
+    
+    def _scrape_by_type_id(self, type_id, region_id=None, order_type='all', verbose=False):
+        '''
+        Scrapes regions or full market for all orders of type "order_type" matching
+        a "type_id"
+        '''
+        if region_id is not None:
+            try:
+                region_id = [r for r in region_id]
+            except TypeError:
+                region_id = [region_id]
+        else:
+            region_id = [region['region_id'] for region in self.region_list.values()]
+        
+        master_catalog = Catalog()
+        for name, region in self.region_list.items():
+            rid = region['region_id']
+            region_catalog = self._request_region_market_orders(rid, type_id, order_type)
+            master_catalog += region_catalog
+            if verbose: print(name,': #Orders :',len(region_catalog),': TotalOrders :', len(master_catalog))
+        return master_catalog
+    
     @staticmethod
     def dict2order(dictionary):
         strptime_template = '%Y-%m-%d %H:%M:%S.%f'
@@ -312,34 +361,7 @@ class Sleeper():
         formatted as a tuple containing a decomposed catalog and a dump timestamp
         '''
 
-        def _request_region_market_orders(region_id=10000002, type_id=34, order_type='all'):
-
-            while True:
-                op = self.app.op['get_markets_region_id_orders'](
-                    region_id = region_id,
-                    page=1,
-                    order_type=order_type)
-                res = self.client.head(op)
-                if res.status == 200:
-                    n_pages = res.header['X-Pages'][0]
-                    operations = []
-                    for page in range(1, n_pages+1):
-                        operations.append(
-                                self.app.op['get_markets_region_id_orders'](
-                                        region_id=region_id,
-                                        page=page,
-                                        order_type=order_type)
-                                )
-                    while True:
-                        response = self.client.multi_request(operations)
-                        pull_time = datetime.datetime.now()
-                        r_codes = [packet[1].status for packet in response]
-                        success = [code == 200 for code in r_codes]
-                        if all(success):
-                            break
-                    orders = Catalog._rawdump2catalog_(response, pull_time)
-                    break
-            return orders
+        
 
         master_catalog = Catalog()
         print('Scraping market data')
@@ -349,7 +371,7 @@ class Sleeper():
             name, region_data = region
             print(name)
             region_id = region_data['region_id']
-            region_dump = _request_region_market_orders(region_id, order_type='all')
+            region_dump = self._request_region_market_orders(region_id, order_type='all')
             master_catalog += region_dump
 
         if save:
