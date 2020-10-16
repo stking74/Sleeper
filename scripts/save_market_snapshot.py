@@ -1,4 +1,4 @@
 import Sleeper
 
-app = Sleeper.core.Sleeper()
+app = Sleeper.Sleeper()
 app.market_dump(save=True)

@@ -1,13 +1,16 @@
 # -*- coding: utf-8 -*-
 
-import esipy as api
 import datetime
 import time
-import numpy as np
-import pickle
 import json
 import os
+import requests
+
+import esipy as api
+import bz2
 import zlib
+import numpy as np
+
 
 def crawldir(topdir=[], ext='sxm'):
     '''
@@ -49,44 +52,121 @@ def soft_append(container, addendum):
         return container
     return container
 
-class Sleeper():
+class Sleeper:
 
     def __init__(self):
         '''
         Initialize Sleeper class. Initializes instance of ESI Swagger interfacial
         app, updates relevant metadata, declares
         '''
-        print('Initiailizing app...')
-        self.esi_app = api.EsiApp()
-        print('Updating swagger...')
-        self.app = self.esi_app.get_latest_swagger
-        print('Initializing client...')
-        self.client = api.EsiClient(retry_requests=True,
-                                    headers={'User-Agent':'Sleeper \\ <0.3.0>'},
-                                    raw_body_only=False)
+
+        def _load_resources_():
+
+            def update_region_list(payload):
+                payload = payload['mapRegions.csv.bz2']
+                payload = payload.split('\r\n')
+                payload = [line.split(',') for line in payload]
+                header = payload[0]
+                body = payload[1:-1]
+                self.regions = {}
+                for line in body:
+                    rid = int(line[0])
+                    region_data = {}
+                    for i, cat in enumerate(header):
+                        try:
+                            region_data[cat] = line[i]
+                        except:
+                            region_data[cat] = None
+                    self.regions[rid] = region_data
+                return
+
+            def import_resource_files():
+                print('Loading static resources...')
+                raw_resources = {}
+                while len(raw_resources) < len(self.resource_files):
+                    for fname in self.resource_files:
+                        if fname not in os.listdir(self.resource_dir):
+                            self._populate_resources_()
+                            break
+                        else:
+                            tag = str(fname)
+                            fname = os.path.join(self.resource_dir, fname)
+                            with open(fname, 'rb') as f:
+                                payload = f.read()
+                            payload =  bz2.decompress(payload)
+                            raw_resources[tag] = payload.decode()
+                return raw_resources
+
+            raw_resources = import_resource_files()
+            update_region_list(raw_resources)
+            return
+
         self.root_dir = os.getcwd()
         self.store_dir = os.path.join(self.root_dir, 'data_dumps')
         self.resource_dir = os.path.join(self.root_dir, 'bin')
-        try:
-            resource_files = os.listdir(self.resource_dir)
-        except:
-            os.mkdir(self.resource_dir)
-            resource_files = os.listdir(self.resource_dir)
-        resource_filenames = [
-            'category_ids.json',
-            'group_ids.json',
-            'heirarchy_topdown.json',
-            'heirarchy_bottomup.json',
-            'type_ids.json'
-        ]
-        for fname in resource_filenames:
-            if fname not in resource_files:
-                print('Performing first-time metadata update. This will take a few minutes.')
-                self._update_market_metadata_()
-                break
-        self._import_market_metadata_()
+        self.resource_files = ['invFlags.csv.bz2', 'invGroups.csv.bz2',
+                        'invItems.csv.bz2', 'invMarketGroups.csv.bz2',
+                        'invMetaGroups.csv.bz2', 'invMetaTypes.csv.bz2',
+                        'invNames.csv.bz2', 'invPositions.csv.bz2',
+                        'invTraits.csv.bz2', 'invTypeMaterials.csv.bz2',
+                        'invTypeReactions.csv.bz2', 'invTypes.csv.bz2',
+                        'invUniqueNames.csv.bz2', 'invVolumes.csv.bz2',
+                        'invCategories.csv.bz2', 'industryActivity.csv.bz2',
+                        'industryActivityMaterials.csv.bz2',
+                        'industryActivityProbabilities.csv.bz2',
+                        'industryActivityProducts.csv.bz2',
+                        'industryActivityRaces.csv.bz2',
+                        'industryActivitySkills.csv.bz2',
+                        'industryBlueprints.csv.bz2', 'mapRegions.csv.bz2'
+                        ]
         self.settings_fname = os.path.join(self.resource_dir, 'sleeper_settings.sl')
-        self._update_region_list()
+        self.regions = None
+        self.esi_app = None
+        self.client = None
+        self.app = None
+        resources = _load_resources_()
+        self._init_interface_()
+        return
+
+    def _init_interface_(self):
+        print('Initiailizing API interface...')
+        self.esi_app = api.EsiApp()
+        self.app = self.esi_app.get_latest_swagger
+        self.client = api.EsiClient(retry_requests=True,
+                                    headers={'User-Agent':'Sleeper \\ <0.4.0>'},
+                                    raw_body_only=False)
+        return
+
+    def _populate_resources_(self):
+
+        import bz2
+
+        def grab_SDE_files(filenames):
+            print('Updating EVE static data')
+            target_urls = {fname:url_base+fname for fname in self.resource_files}
+            responses = {}
+            for fname, url in target_urls.items():
+                while True:
+                    response = requests.get(url)
+                    if response.status_code == 200:
+                        new_fname = os.path.join(self.resource_dir,fname)[:-4]
+                        payload = response.content
+                        responses[fname] = payload
+                        break
+            return responses
+
+        def write_file(fname, payload):
+            fname = os.path.join(self.resource_dir, fname)
+            with open(fname, 'wb') as f:
+                f.write(payload)
+            return
+
+        url_base = r"http://www.fuzzwork.co.uk/dump/latest/"
+
+        responses = grab_SDE_files(self.resource_files)
+        for fname, payload in responses.items():
+            write_file(fname, payload)
+
         return
 
     def _request_region_market_orders(self, region_id=10000002, type_id=34, order_type='all'):
@@ -117,12 +197,6 @@ class Sleeper():
                 orders = Catalog._rawdump2catalog_(response, pull_time)
                 break
         return orders
-    
-    @staticmethod
-    def _save_catalog_(filename, catalog):
-        with open(filename, 'w') as f:
-            json.dump(catalog._decompose_(), f)
-        return
 
     def _update_market_metadata_(self):
         topdown={}
@@ -195,27 +269,6 @@ class Sleeper():
             json.dump(bottomup, f)
 
         return
-
-    def _update_region_list(self):
-
-        print('Refreshing region metadata...')
-        operation = self.app.op['get_universe_regions']()
-        response = self.client.request(operation)
-        region_ids = response.data
-        response_header = response.header
-        self.region_list = {}
-        i = 1
-        for region_id in region_ids:
-#            print(f'{i}/{len(region_ids)}')
-            operation = self.app.op['get_universe_regions_region_id'](
-                region_id=region_id)
-            response = self.client.request(operation)
-            region_name = response.data['name']
-            self.region_list[region_name] = dict(response.data)
-            for name, data in self.region_list.items():
-                self.region_list[name]['constellations'] = list(self.region_list[name]['constellations'])
-            i += 1
-        return self.region_list
 
     def _import_market_metadata_(self):
 
@@ -300,7 +353,7 @@ class Sleeper():
         for tid in type_id:
             results[tid] = _request_region_market_history(region_id, tid)
         return results
-    
+
     def _scrape_by_type_id(self, type_id, region_id=None, order_type='all', verbose=False):
         '''
         Scrapes regions or full market for all orders of type "order_type" matching
@@ -312,16 +365,39 @@ class Sleeper():
             except TypeError:
                 region_id = [region_id]
         else:
-            region_id = [region['region_id'] for region in self.region_list.values()]
-        
+            region_id = [k for k in self.regions.keys()]
+
         master_catalog = Catalog()
-        for name, region in self.region_list.items():
-            rid = region['region_id']
+        for rid, region in self.regions.items():
+            name = region['regionName']
             region_catalog = self._request_region_market_orders(rid, type_id, order_type)
             master_catalog += region_catalog
             if verbose: print(name,': #Orders :',len(region_catalog),': TotalOrders :', len(master_catalog))
         return master_catalog
-    
+
+#    def get_lowest_sell(self, type_id, region_id=None, n_results=10):
+#
+#        def find_n_lowest(arr, n):
+#            arr = list(arr)
+#            indices = []
+#            values = []
+#            i = 0
+#            while i < n:
+#                try:
+#                    minimum = min(arr)
+#                except ValueError:
+#                    break
+#                mindex = arr.index(minimum)
+#                indices.append(mindex)
+#                values.append(arr.pop(mindex))
+#                i+=1
+#            return values, indices
+#
+#
+#        return master_catalog
+
+
+
     @staticmethod
     def dict2order(dictionary):
         strptime_template = '%Y-%m-%d %H:%M:%S.%f'
@@ -361,30 +437,23 @@ class Sleeper():
         formatted as a tuple containing a decomposed catalog and a dump timestamp
         '''
 
-        
+        if self.client is None:
+            self._init_interface_()
 
         master_catalog = Catalog()
         print('Scraping market data')
         print('Region:')
-        for region in self.region_list.items():
-
-            name, region_data = region
+        for rid, region in self.regions.items():
+            name = region['regionName']
             print(name)
-            region_id = region_data['region_id']
-            region_dump = self._request_region_market_orders(region_id, order_type='all')
+            region_dump = self._request_region_market_orders(rid, order_type='all')
             master_catalog += region_dump
 
         if save:
-            decomposed_catalog = master_catalog._decompose_()
-            refresh_time = datetime.datetime.now()
-            pik_filename = 'market_dump-'+str(refresh_time)[:-7]+'.sld'
-            pik_filename = [c for c in pik_filename]
-            pik_filename[25] = '-'
-            pik_filename[28] = '-'
-            pik_filename = ''.join(pik_filename)
-            pik_filename = os.path.join(self.store_dir, pik_filename)
-            dump_contents = (decomposed_catalog, str(refresh_time))
-            Sleeper._save_dumpfile_(dump_contents, pik_filename)
+            refresh_time = time.time()
+            fname = 'market_dump-'+str(refresh_time)+'.cat'
+            fname = os.path.join(self.store_dir, fname)
+            master_catalog.save(fname)
 
         print('DONE')
 
@@ -615,6 +684,22 @@ class Catalog(dict):
             rebuilt[new_order.id] = new_order
         rebuilt.strip_duplicates()
         return rebuilt
+
+    def save(self, fname):
+        payload = self._decompose_()
+        payload = json.dumps(payload).encode('utf-8')
+        payload = bz2.compress(payload)
+        with open(fname, 'wb') as f:
+            f.write(payload)
+        return
+
+    @staticmethod
+    def load(fname):
+        with open(fname, 'rb') as f:
+            payload = f.read()
+        payload = bz2.decompress(payload).decode('utf-8')
+        payload = json.loads(payload)
+        return Catalog._recompose_(payload)
 
     def filter(self, criteria, value):
         '''

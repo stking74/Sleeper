@@ -3,3 +3,4 @@ bin/
 *.txt
 __pycache__/
 .git/
+scripts/
