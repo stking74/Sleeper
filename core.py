@@ -198,114 +198,123 @@ class Sleeper:
                 break
         return orders
 
-    def _update_market_metadata_(self):
-        topdown={}
-        bottomup={}
-        ignore_categories = [0,1,3,10,11,14,24,26,29,350001,53,54,59,49]
+    # def _update_market_metadata_(self):
+    #     topdown={}
+    #     bottomup={}
+    #     ignore_categories = [0,1,3,10,11,14,24,26,29,350001,53,54,59,49]
+    #
+    #     operation = self.app.op['get_universe_categories']()
+    #     response = self.client.request(operation)
+    #     cat_ids = [d for d in response.data]
+    #     for cid in ignore_categories:
+    #         cat_ids.remove(cid)
+    #     cat_names = []
+    #     grp_ids = []
+    #     grp_names = []
+    #     type_ids = []
+    #     type_names = []
+    #     for cid in cat_ids:
+    #         operation = self.app.op['get_universe_categories_category_id'](
+    #                 category_id=cid)
+    #         while True:
+    #             response = self.client.request(operation)
+    #             if response.status == 200:
+    #                 break
+    #         cat_names.append(response.data['name'])
+    #         categorical_groups = response.data['groups']
+    #         categorized = {}
+    #         for gid in categorical_groups:
+    #             grp_ids.append(gid)
+    #             operation = self.app.op['get_universe_groups_group_id'](
+    #                 group_id=gid)
+    #             while True:
+    #                 response = self.client.request(operation)
+    #                 if response.status == 200:
+    #                     break
+    #             grp_names.append(response.data['name'])
+    #             grouped_types = response.data['types']
+    #             grouped = []
+    #             for tid in grouped_types:
+    #                 type_ids.append(tid)
+    #                 operation = self.app.op['get_universe_types_type_id'](
+    #                         type_id=tid)
+    #                 while True:
+    #                     response = self.client.request(operation)
+    #                     if response.status == 200:
+    #                         break
+    #                 type_names.append(response.data['name'])
+    #                 grouped.append(tid)
+    #                 bottomup[tid]={'category_id':cid, 'group_id':gid}
+    #             categorized[gid] = grouped
+    #         topdown[cid] = categorized
+    #         print('Pulled category: %s'%cat_names[-1])
+    #
+    #     category_ids_fname = os.path.join(self.resource_dir, 'category_ids.json')
+    #     group_ids_fname = os.path.join(self.resource_dir, 'group_ids.json')
+    #     type_ids_fname = os.path.join(self.resource_dir, 'type_ids.json')
+    #     topdown_fname = os.path.join(self.resource_dir, 'heirarchy_topdown.json')
+    #     bottomup_fname = os.path.join(self.resource_dir, 'heirarchy_bottomup.json')
+    #
+    #     print('Writing metadata...')
+    #
+    #     with open(category_ids_fname, 'w') as f:
+    #         json.dump((cat_ids, cat_names), f)
+    #     with open(group_ids_fname, 'w') as f:
+    #         json.dump((grp_ids, grp_names), f)
+    #     with open(type_ids_fname, 'w') as f:
+    #         json.dump((type_ids, type_names), f)
+    #     with open(topdown_fname, 'w') as f:
+    #         json.dump(topdown, f)
+    #     with open(bottomup_fname, 'w') as f:
+    #         json.dump(bottomup, f)
+    #
+    #     return
+    #
+    # def _import_market_metadata_(self):
+    #
+    #     category_ids_fname = os.path.join(self.resource_dir, 'category_ids.json')
+    #     group_ids_fname = os.path.join(self.resource_dir, 'group_ids.json')
+    #     type_ids_fname = os.path.join(self.resource_dir, 'type_ids.json')
+    #     topdown_fname = os.path.join(self.resource_dir, 'heirarchy_topdown.json')
+    #     bottomup_fname = os.path.join(self.resource_dir, 'heirarchy_bottomup.json')
+    #
+    #     with open(category_ids_fname, 'r') as f:
+    #         cat_ids, cat_names = tuple(json.load(f))
+    #     with open(group_ids_fname, 'r') as f:
+    #         grp_ids, grp_names = tuple(json.load(f))
+    #     with open(type_ids_fname, 'r') as f:
+    #         type_ids, type_names = tuple(json.load(f))
+    #     with open(topdown_fname, 'r') as f:
+    #         self.topdown = json.load(f)
+    #     with open(bottomup_fname, 'r') as f:
+    #         self.bottomup = json.load(f)
+    #
+    #     self.categories = {}
+    #     self.categories_reverse = {}
+    #     for idx, cid in enumerate(cat_ids):
+    #         self.categories[cid] = cat_names[idx]
+    #         self.categories_reverse[cat_names[idx]] = cid
+    #     self.groups = {}
+    #     self.groups_reverse = {}
+    #     for idx, gid in enumerate(grp_ids):
+    #         self.groups[gid] = grp_names[idx]
+    #         self.groups_reverse[grp_names[idx]] = gid
+    #     self.types = {}
+    #     self.types_reverse = {}
+    #     for idx, tid in enumerate(type_ids):
+    #         self.types[tid] = type_names[idx]
+    #         self.types_reverse[type_names[idx]] = tid
+    #
+    #     return
 
-        operation = self.app.op['get_universe_categories']()
-        response = self.client.request(operation)
-        cat_ids = [d for d in response.data]
-        for cid in ignore_categories:
-            cat_ids.remove(cid)
-        cat_names = []
-        grp_ids = []
-        grp_names = []
-        type_ids = []
-        type_names = []
-        for cid in cat_ids:
-            operation = self.app.op['get_universe_categories_category_id'](
-                    category_id=cid)
-            while True:
-                response = self.client.request(operation)
-                if response.status == 200:
-                    break
-            cat_names.append(response.data['name'])
-            categorical_groups = response.data['groups']
-            categorized = {}
-            for gid in categorical_groups:
-                grp_ids.append(gid)
-                operation = self.app.op['get_universe_groups_group_id'](
-                    group_id=gid)
-                while True:
-                    response = self.client.request(operation)
-                    if response.status == 200:
-                        break
-                grp_names.append(response.data['name'])
-                grouped_types = response.data['types']
-                grouped = []
-                for tid in grouped_types:
-                    type_ids.append(tid)
-                    operation = self.app.op['get_universe_types_type_id'](
-                            type_id=tid)
-                    while True:
-                        response = self.client.request(operation)
-                        if response.status == 200:
-                            break
-                    type_names.append(response.data['name'])
-                    grouped.append(tid)
-                    bottomup[tid]={'category_id':cid, 'group_id':gid}
-                categorized[gid] = grouped
-            topdown[cid] = categorized
-            print('Pulled category: %s'%cat_names[-1])
-
-        category_ids_fname = os.path.join(self.resource_dir, 'category_ids.json')
-        group_ids_fname = os.path.join(self.resource_dir, 'group_ids.json')
-        type_ids_fname = os.path.join(self.resource_dir, 'type_ids.json')
-        topdown_fname = os.path.join(self.resource_dir, 'heirarchy_topdown.json')
-        bottomup_fname = os.path.join(self.resource_dir, 'heirarchy_bottomup.json')
-
-        print('Writing metadata...')
-
-        with open(category_ids_fname, 'w') as f:
-            json.dump((cat_ids, cat_names), f)
-        with open(group_ids_fname, 'w') as f:
-            json.dump((grp_ids, grp_names), f)
-        with open(type_ids_fname, 'w') as f:
-            json.dump((type_ids, type_names), f)
-        with open(topdown_fname, 'w') as f:
-            json.dump(topdown, f)
-        with open(bottomup_fname, 'w') as f:
-            json.dump(bottomup, f)
-
-        return
-
-    def _import_market_metadata_(self):
-
-        category_ids_fname = os.path.join(self.resource_dir, 'category_ids.json')
-        group_ids_fname = os.path.join(self.resource_dir, 'group_ids.json')
-        type_ids_fname = os.path.join(self.resource_dir, 'type_ids.json')
-        topdown_fname = os.path.join(self.resource_dir, 'heirarchy_topdown.json')
-        bottomup_fname = os.path.join(self.resource_dir, 'heirarchy_bottomup.json')
-
-        with open(category_ids_fname, 'r') as f:
-            cat_ids, cat_names = tuple(json.load(f))
-        with open(group_ids_fname, 'r') as f:
-            grp_ids, grp_names = tuple(json.load(f))
-        with open(type_ids_fname, 'r') as f:
-            type_ids, type_names = tuple(json.load(f))
-        with open(topdown_fname, 'r') as f:
-            self.topdown = json.load(f)
-        with open(bottomup_fname, 'r') as f:
-            self.bottomup = json.load(f)
-
-        self.categories = {}
-        self.categories_reverse = {}
-        for idx, cid in enumerate(cat_ids):
-            self.categories[cid] = cat_names[idx]
-            self.categories_reverse[cat_names[idx]] = cid
-        self.groups = {}
-        self.groups_reverse = {}
-        for idx, gid in enumerate(grp_ids):
-            self.groups[gid] = grp_names[idx]
-            self.groups_reverse[grp_names[idx]] = gid
-        self.types = {}
-        self.types_reverse = {}
-        for idx, tid in enumerate(type_ids):
-            self.types[tid] = type_names[idx]
-            self.types_reverse[type_names[idx]] = tid
-
-        return
+    def _make_request_(self, op, maxtries=5):
+        try_count = 0
+        while try_count < maxtries:
+            response = self.client.request(op)
+            try_count += 1
+            if resonse.status == 200:
+                return response
+        return None
 
     @staticmethod
     def _rawentry2order_(rawentry, timestamp):
@@ -501,6 +510,19 @@ class Sleeper:
             ids, names = json.load(f)
         idx = ids.index(cid)
         return names[idx]
+
+    def get_route(self, origin, destination, avoid=None, security='shortest'):
+
+        if type(origin) is str:
+            pass #Convert string to integer system id
+        if type(destination) is str:
+            pass #Convert string to integer system id
+
+        op = self.app.op['get_route'](
+            origin=origin, destination=destination, flag=security, avoid=avoid
+        )
+        response = self._make_request_(op)
+
 
 class Order(dict):
     '''

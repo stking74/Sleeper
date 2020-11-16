@@ -2,4 +2,5 @@
 
 # __init__.py file for Sleeper
 
-from .core import *
+from .core import Sleeper, Order, Catalog
+from .SleeperGUI import GUI

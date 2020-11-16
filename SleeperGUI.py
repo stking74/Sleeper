@@ -9,105 +9,105 @@ import os
 import tkinter
 import datetime
 import matplotlib.pyplot as plt
-import pickle
-from Sleeper import Sleeper
+from .core import Sleeper, Catalog, Order
 
-class SleeperGUI(tkinter.Toplevel):
-    
-    def __init__(self, master):
-        
-        
+class GUI:
+
+    def __init__(self):
+
+        def open_query_gui():
+            query_gui = QueryGUI(self.master, self.sleeper)
+            return
+
+        def open_catalog_browser():
+            catalog_browser = CatalogBrowser(self.master, self.sleeper)
+            return
+
+        def static_refresh():
+            self.sleeper._populate_resources_()
+            return
+
         #Headers and text
-        self.master = master
+        self.master = tkinter.Tk()
         self.readout_txt = tkinter.StringVar()
         self.readout_txt.set('Initializing GUI...')
-        self.readout = tkinter.Label(master, textvariable=self.readout_txt)
+        self.readout = tkinter.Label(self.master, textvariable=self.readout_txt)
         self.readout.grid(row=20, column=0)
         #Sleeper app startup
         self.readout_txt.set('Initializing Sleeper app...')
         self.sleeper = Sleeper()
-        self.sleeper._update_region_list()
         self.readout_txt.set('Sleeper app initialized')
         #Buttons
-        self.open_dir_button = tkinter.Button(master, text='Open', command=self.open_dir_window)
-        self.scrape_button = tkinter.Button(master, text='Scrape market', command=self.sleeper.market_dump)
+        self.open_dir_button = tkinter.Button(self.master, text='Browse data', command=open_catalog_browser)
+        self.scrape_button = tkinter.Button(self.master, text='Query data', command=open_query_gui)
+        static_refresh_button = tkinter.Button(self.master, text='Refresh static resources', command=static_refresh)
         #Layout
         self.open_dir_button.grid(row=1, column=0)
         self.scrape_button.grid(row=2, column=0)
-        
-        
+        static_refresh_button.grid(row=3,column=0)
+        self.master.mainloop()
+
         return
-    
-    def open_dir_window(self):
-        
-        def open_directory():
-            
-            def pick_range(event):
-                xpos = event.xdata
-                ypos = event.ydata
-                return
-            #Check for dir exist
-            target_dir = dir_entry.get()
-            if os.path.exists(target_dir):
-                #Walk target dir, build list of files
-                dir_dump = os.listdir(target_dir)
-                files = []
-                for item in dir_dump:
-                    item = os.path.join(target_dir, item)
-                    if os.path.isfile(item):
-                        if item.split('.')[1] == 'pik':
-                            files.append(os.path.basename(item))
-                file_timestamps = [datetime.datetime.strptime(fname[12:22],'%Y-%m-%d') for fname in files]
-                earliest = file_timestamps[0]
-                latest = file_timestamps[-1]
-                for ts in file_timestamps:
-                    if ts < earliest:
-                        earliest = ts
-                    if ts > latest:
-                        latest = ts
-                td = latest - earliest
-                td = td.days
-                str_timestamps = [str(ts.date()) for ts in file_timestamps]
-                
-                self.data_range_str_low = tkinter.StringVar(dir_select_window)
-                self.data_range_str_high = tkinter.StringVar(dir_select_window)
-                dir_range_select_lower = tkinter.OptionMenu(dir_select_window, self.data_range_str_low, *str_timestamps)
-                dir_range_select_upper = tkinter.OptionMenu(dir_select_window, self.data_range_str_high, *str_timestamps)
-                range_load_button = tkinter.Button(dir_select_window, text='Load data range', command=self.load_datarange)
-                
-                dir_range_select_lower.grid(row=1, column=0)
-                dir_range_select_upper.grid(row=1, column=1)
-                range_load_button.grid(row=2, column=1)
-                
-                #Init dir content window
-                
-                print('success')
-                return
-            else:
-                print('Directory not found.')
-            print(target_dir)
-            return
-        
-        #Init slave window
-        dir_select_window = tkinter.Toplevel(self.master)
+
+class CatalogBrowser:
+
+    def __init__(self, master, app):
+        self.window = tkinter.Toplevel(master)
+        self.sleeper = app
+        self.active_catalog = None
         dir_entry = tkinter.StringVar()
         #Slave window widgets
-        dir_entry_field = tkinter.Entry(dir_select_window, textvariable=dir_entry)
-        dir_open_button = tkinter.Button(dir_select_window, text='Open', command=open_directory)
+        dir_entry_field = tkinter.Entry(self.window, textvariable=dir_entry)
+        dir_open_button = tkinter.Button(self.window, text='Open', command=lambda:open_catalog(dir_entry.get()))
         #Slave window layout
         dir_entry_field.grid(row=0, column=0)
         dir_open_button.grid(row=0,column=1)
-        
+
+    def open_catalog(self,fname):
+        self.active_catalog = Catalog.load(fname)
         return
-    
-    
-    
-    def load_datarange(self):
-        self.active_catalog = self.sleeper._agregate_range_(self.data_range_str_low.get(), self.data_range_str_high.get())
-        
+
+class QueryGUI:
+
+    def __init__(self, master, app):
+        self.window = tkinter.Toplevel(master)
+        self.sleeper = app
+        self.readout_txt = tkinter.StringVar()
+        self.readout_txt.set('Initializing Query Assistant...')
+        self.readout = tkinter.Label(self.window, textvariable=self.readout_txt)
+        self.readout.grid(row=20, column=0)
+        #Buttons
+        open_dir_button = tkinter.Button(self.window, text='Full Market Scrape', command=self.full_scrape)
+        save_scrape_button = tkinter.Button(self.window, text='Save Scrape', command=lambda:self.save_active_catalog)
+        # filtered_scrape_button = tkinter.Button(self.window, text='Filtered scrape', command=)
+        #Filters
+        #By typeID
+        self.type_id_filters = tkinter.StringVar()
+        typeId_filters_field = tkinter.Entry(self.window, textvariable=self.type_id_filters)
+        self.region_id_filters = tkinter.StringVar()
+        regionId_filters_field = tkinter.Entry(self.window, textvariable=self.region_id_filters)
+        #Misc fields
+        self.save_fname = tkinter.StringVar()
+        save_fname_field = tkinter.Entry(self.window, textvariable=self.save_fname)
+        #Layout
+        open_dir_button.grid(row=1, column=0)
+        typeId_filters_field.grid(row=2, column=0)
+        regionId_filters_field.grid(row=3, column=0)
+        save_fname_field.grid(row=4, column=1)
+        save_scrape_button.grid(row=5, column=1)
+        # self.master.mainloop()
         return
-    
-    
-root = tkinter.Tk()
-gui = SleeperGUI(root)
-root.mainloop()
+
+    def full_scrape(self):
+        self.readout_txt.set('Performing full market scrape...')
+        self.readout = tkinter.Label(self.window, textvariable=self.readout_txt)
+        self.active_catalog = self.sleeper.market_dump()
+        self.readout_txt.set('Market scrape finished!')
+        self.readout = tkinter.Label(self.window, textvariable=self.readout_txt)
+        return
+
+    def save_active_catalog(self):
+        fname = self.save_fname.get()
+        fname = os.path.join(self.sleeper.store_dir, fname)
+        self.active_catalog.save(fname)
+        return
