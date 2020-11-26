@@ -80,51 +80,18 @@ class Sleeper:
                     self.regions[rid] = region_data
                 return
 
-            def import_resource_files():
-                print('Loading static resources...')
-                raw_resources = {}
-                while len(raw_resources) < len(self.resource_files):
-                    for fname in self.resource_files:
-                        if fname not in os.listdir(self.resource_dir):
-                            self._populate_resources_()
-                            break
-                        else:
-                            tag = str(fname)
-                            fname = os.path.join(self.resource_dir, fname)
-                            with open(fname, 'rb') as f:
-                                payload = f.read()
-                            payload =  bz2.decompress(payload)
-                            raw_resources[tag] = payload.decode()
-                return raw_resources
-
-            raw_resources = import_resource_files()
-            update_region_list(raw_resources)
+            # update_region_list(raw_resources)
+            # update_typeID_list(raw_resources)
             return
 
         self.root_dir = os.getcwd()
         self.store_dir = os.path.join(self.root_dir, 'data_dumps')
         self.resource_dir = os.path.join(self.root_dir, 'bin')
-        self.resource_files = ['invFlags.csv.bz2', 'invGroups.csv.bz2',
-                        'invItems.csv.bz2', 'invMarketGroups.csv.bz2',
-                        'invMetaGroups.csv.bz2', 'invMetaTypes.csv.bz2',
-                        'invNames.csv.bz2', 'invPositions.csv.bz2',
-                        'invTraits.csv.bz2', 'invTypeMaterials.csv.bz2',
-                        'invTypeReactions.csv.bz2', 'invTypes.csv.bz2',
-                        'invUniqueNames.csv.bz2', 'invVolumes.csv.bz2',
-                        'invCategories.csv.bz2', 'industryActivity.csv.bz2',
-                        'industryActivityMaterials.csv.bz2',
-                        'industryActivityProbabilities.csv.bz2',
-                        'industryActivityProducts.csv.bz2',
-                        'industryActivityRaces.csv.bz2',
-                        'industryActivitySkills.csv.bz2',
-                        'industryBlueprints.csv.bz2', 'mapRegions.csv.bz2'
-                        ]
         self.settings_fname = os.path.join(self.resource_dir, 'sleeper_settings.sl')
-        self.regions = None
+        self.static_data = Static(self.resource_dir)
         self.esi_app = None
         self.client = None
         self.app = None
-        resources = _load_resources_()
         self._init_interface_()
         return
 
@@ -138,6 +105,7 @@ class Sleeper:
         return
 
     def _populate_resources_(self):
+        #DEPRECATED!!!
 
         import bz2
 
@@ -452,8 +420,12 @@ class Sleeper:
         master_catalog = Catalog()
         print('Scraping market data')
         print('Region:')
-        for rid, region in self.regions.items():
-            name = region['regionName']
+        region_ids = self.static_data.IDs['region']
+        region_names = self.static_data.Names['region']
+        if len(region_ids) != len(region_names):
+            raise ValueError('List of region names and IDs have different lengths')
+        for i, name in enumerate(region_names):
+            rid = region_ids[i]
             print(name)
             region_dump = self._request_region_market_orders(rid, order_type='all')
             master_catalog += region_dump
@@ -494,18 +466,21 @@ class Sleeper:
         return stripped_catalog
 
     def tid2name(self, tid):
+        """Convert integer TypeID to string"""
         with open(os.path.join(self.resource_dir, 'type_ids.json'),'r') as f:
             ids, names = json.load(f)
         idx = ids.index(tid)
         return names[idx]
 
     def gid2name(self, gid):
+        """Look up item group name by GroupID"""
         with open(os.path.join(self.resource_dir, 'group_ids.json'),'r') as f:
             ids, names = json.load(f)
         idx = ids.index(gid)
         return names[idx]
 
     def cid2name(self, cid):
+        """Look up item category name by CategoryID"""
         with open(os.path.join(self.resource_dir, 'category_ids.json'),'r') as f:
             ids, names = json.load(f)
         idx = ids.index(cid)
@@ -872,30 +847,65 @@ class Catalog(dict):
                 merged_catalog[order_id] = new_order
         return merged_catalog
 
-class Reporter:
+class Static:
     '''
-    Object for organization and handling of Sleeper data for the purposes
-    of compilation of aggregate data into a meaningful format.
+    Reference container for accessing and parsing EVE static data, ex. for
+    converting from numerical Type IDs to item names and vice versa
     '''
 
-    def __init__(self, data_dir, report_dir):
-        self.data_dir = data_dir
-        self.report_dir = report_dir
-        return
+    def __init__(self, resource_dir):
 
-    def list2sheet(self, list_data, worksheet):
-        '''
-        Converts a list of lists into a formatted openpyxl worksheet, with each nested
-        list representing a separate row of the final worksheet
-        '''
-        for row, data in enumerate(list_data):
-            row += 1
-            for column, value in enumerate(data):
-                column += 1
-                worksheet.cell(row=row, column=column, value=value)
-        return worksheet
+        def parse_resource_file(fname):
+            fname = os.path.join(self.resource_dir, fname)
+            with bz2.open(fname) as f:
+                lines = [line.decode().rstrip().split(',') for line in f.readlines()]
+            while '' in lines:
+                lines.remove('')
+            return lines
 
-    @staticmethod
-    def generate_report(catalog, *args, **kwds):
+        def populate_types():
+            lines = parse_resource_file('invTypes.csv.bz2')
+            typeIDs = []
+            typeNames = []
+            for line in lines[1]:
+                try:
+                    typeIDs.append(int(line[0]))
+                    typeNames.append(line[2])
+                except ValueError: pass
+                except IndexError: pass
+            self.IDs['type'] = typeIDs
+            self.Names['type'] = typeNames
+            return
 
-        return
+        def populate_regions():
+            lines = parse_resource_file('mapRegions.csv.bz2')
+            regionIDs = []
+            regionNames = []
+            for line in lines[1:]:
+                regionIDs.append(int(line[0]))
+                regionNames.append(line[1])
+            self.IDs['region'] = regionIDs
+            self.Names['region'] = regionNames
+            return
+
+        def populate_groups():
+            lines = parse_resource_file('invGroups.csv.bz2')
+            groupIDs = []
+            groupNames = []
+            groupCategoryIDs = []
+            for line in lines[1:]:
+                groupIDs.append(int(line[0]))
+                groupNames.append(line[2])
+            self.IDs['group'] = groupIDs
+            self.Names['group'] = groupNames
+            return
+        #Initialize empty container for numerical IDs
+        self.IDs={'type': None, 'group': None, 'category': None,
+                  'location': None, 'region': None, 'system': None}
+
+        #Initialize empty container for plaintext names (as duplicate of empty ID dict)
+        self.Names = dict(self.IDs)
+
+        self.resource_dir = resource_dir
+        populate_types()
+        populate_regions()
