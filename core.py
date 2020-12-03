@@ -11,27 +11,6 @@ import bz2
 import zlib
 import numpy as np
 
-
-def crawldir(topdir=[], ext='sxm'):
-    '''
-    Crawls through given directory topdir, returns list of all files with
-    extension matching ext
-    '''
-    import re
-    fn = dict()
-    for root, dirs, files in os.walk(topdir):
-              for name in files:
-
-                if len(re.findall('\.'+ext,name)):
-                    addname = os.path.join(root,name)
-
-                    if root in fn.keys():
-                        fn[root].append(addname)
-
-                    else:
-                        fn[root] = [addname]
-    return fn
-
 def soft_append(container, addendum):
     '''
     Appends addendum item to container only if addendum is not already member
@@ -102,39 +81,6 @@ class Sleeper:
         self.client = api.EsiClient(retry_requests=True,
                                     headers={'User-Agent':'Sleeper \\ <0.4.0>'},
                                     raw_body_only=False)
-        return
-
-    def _populate_resources_(self):
-        #DEPRECATED!!!
-
-        import bz2
-
-        def grab_SDE_files(filenames):
-            print('Updating EVE static data')
-            target_urls = {fname:url_base+fname for fname in self.resource_files}
-            responses = {}
-            for fname, url in target_urls.items():
-                while True:
-                    response = requests.get(url)
-                    if response.status_code == 200:
-                        new_fname = os.path.join(self.resource_dir,fname)[:-4]
-                        payload = response.content
-                        responses[fname] = payload
-                        break
-            return responses
-
-        def write_file(fname, payload):
-            fname = os.path.join(self.resource_dir, fname)
-            with open(fname, 'wb') as f:
-                f.write(payload)
-            return
-
-        url_base = r"http://www.fuzzwork.co.uk/dump/latest/"
-
-        responses = grab_SDE_files(self.resource_files)
-        for fname, payload in responses.items():
-            write_file(fname, payload)
-
         return
 
     def _request_region_market_orders(self, region_id=10000002, type_id=34, order_type='all'):
@@ -498,7 +444,6 @@ class Sleeper:
         )
         response = self._make_request_(op)
 
-
 class Order(dict):
     '''
     Object for handling and organization of order data. Attributes correspond
@@ -708,6 +653,13 @@ class Catalog(dict):
 
             value : str
         '''
+
+        # def filter_type(value):
+        #     if type(value) is str:
+        #
+        #     if type(value) is int:
+
+
         matching_orders = []
         criteria = criteria.upper()
         if criteria=='DURATION':
@@ -907,5 +859,52 @@ class Static:
         self.Names = dict(self.IDs)
 
         self.resource_dir = resource_dir
+
+        #Check for exisiing static resource files
+        try:
+            resource_file_list = os.listdir(self.resource_dir)
+            if len(resource_file_list) == 0:
+                self._download_resources_()
+        except FileNotFoundError:
+            os.mkdir(self.resource_dir)
+            self._download_resources_()
+
+        #Read data from static resource files
         populate_types()
         populate_regions()
+
+    def _download_resources_(self):
+
+        import bz2
+
+        def grab_SDE_files():
+            print('Updating EVE static data')
+
+            resource_filenames = ['invTypes.csv.bz2', 'invCategories.csv.bz2',
+                'mapRegions.csv.bz2']
+
+            target_urls = {fname:url_base+fname for fname in resource_filenames}
+            responses = {}
+            for fname, url in target_urls.items():
+                while True:
+                    response = requests.get(url)
+                    if response.status_code == 200:
+                        new_fname = os.path.join(self.resource_dir,fname)[:-4]
+                        payload = response.content
+                        responses[fname] = payload
+                        break
+            return responses
+
+        def write_file(fname, payload):
+            fname = os.path.join(self.resource_dir, fname)
+            with open(fname, 'wb') as f:
+                f.write(payload)
+            return
+
+        url_base = r"http://www.fuzzwork.co.uk/dump/latest/"
+
+        responses = grab_SDE_files()
+        for fname, payload in responses.items():
+            write_file(fname, payload)
+
+        return
